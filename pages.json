@@ -9,6 +9,17 @@
 					"titleNView": false
 				}
 			}
+		},
+		{
+			"path" : "pages/chat/chat",
+			"style": {
+				"navigationStyle": "custom",
+				"enablePullDownRefresh": false,
+				"backgroundColor": "white",
+				"app-plus": {
+					"titleNView": false
+				}
+			}
 		}
 	],
 	"globalStyle": {

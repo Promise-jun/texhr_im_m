@@ -91,9 +91,8 @@
 			},
 
 			openConversation(conversation) {
-				uni.showToast({
-					title: `打开与${conversation.name}的会话`,
-					icon: 'none'
+				uni.navigateTo({
+					url: `/pages/chat/chat?id=${conversation.id}&name=${encodeURIComponent(conversation.name)}`
 				})
 			}
 		}
