@@ -72,6 +72,18 @@
     "h5" : {
         "router" : {
             "mode" : "history"
+        },
+        "devServer" : {
+            "proxy" : {
+                "/proxy/texhr-openapi" : {
+                    "target" : "http://openapi.texhr.cn",
+                    "changeOrigin" : true,
+                    "secure" : false,
+                    "pathRewrite" : {
+                        "^/proxy/texhr-openapi" : ""
+                    }
+                }
+            }
         }
     }
 }

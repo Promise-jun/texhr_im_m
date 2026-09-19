@@ -1,0 +1,9 @@
+{
+  "name": "texhr-im-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TexHR mobile IM client",
+  "dependencies": {
+    "nim-web-sdk-ng": ">=10"
+  }
+}
