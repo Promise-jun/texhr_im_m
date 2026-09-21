@@ -36,6 +36,6 @@ const result = await requestApi({
 })
 ```
 
-封装会向网关发起 POST 请求，外层 `Ip` 字段当前固定传空字符串。`Content` 传入对象时会自动转换为 JSON 字符串。`PersonId` 和 `Token` 从 `cfw_personal` Cookie 的 `personId`、`token` 字段读取，Cookie 不存在或内容无效时传空字符串。
+封装会向网关发起 POST 请求，外层 `Ip` 字段当前固定传空字符串。`Content` 传入对象时会自动转换为 JSON 字符串。`PersonId` 和 `Token` 从 `persontokeninfotexhr` Cookie 读取；新版 Cookie 内容格式为 `personId=...&token=...`，同时兼容旧的 JSON 格式。Cookie 不存在、无法被页面脚本读取或内容无效时传空字符串。
 
 H5 本地开发已在 `manifest.json` 配置反向代理：`/proxy/cfw-openapi` 转发到 `https://openapi.cfw.cn`。修改代理配置后需要停止并重新运行 H5。生产部署时仍需由站点服务端配置同域反向代理，也可通过 `configureRequest({ apiUrl })` 切换地址。App 端不受浏览器 CORS 限制。

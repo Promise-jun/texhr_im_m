@@ -1,14 +1,8 @@
 <script>
 	import { initAndLoginNim } from './services/nim'
-	import { AUTH_COOKIE_KEYS, setEncodedCookie } from './services/request'
-
-	const CFW_PERSONAL_COOKIE_VALUE = '%7B%22personId%22%3A1380685%2C%22token%22%3A%22x81MvT43pqrDYk74xYXB%22%7D'
 
 	export default {
 		onLaunch: async function() {
-			// 先写入当前用户态 Cookie，创建云信账号接口会读取其中的 PersonId 和 Token。
-			setEncodedCookie(AUTH_COOKIE_KEYS.PERSONAL, CFW_PERSONAL_COOKIE_VALUE)
-
 			try {
 				// 初始化云信、获取云信账号密码，并使用返回的凭证完成登录。
 				await initAndLoginNim()

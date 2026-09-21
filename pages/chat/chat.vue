@@ -83,7 +83,9 @@
 
 		<view class="composer">
 			<view class="composer-main">
-				<button class="phrase-button" @click="togglePanel('phrases')">常用语</button>
+				<image v-if="activePanel === 'phrases'" src="../../static/icon_key.png" class="phrase-icon"
+					mode="aspectFit" @click="togglePanel('phrases')"></image>
+				<button v-else class="phrase-button" @click="togglePanel('phrases')">常用语</button>
 				<input v-model.trim="draft" class="message-input" :focus="inputFocused" confirm-type="send"
 					cursor-spacing="18" maxlength="500" placeholder="输入消息" @focus="handleInputFocus"
 					@confirm="sendMessage" />
@@ -92,10 +94,35 @@
 				<image v-else src="../../static/icon_add.png" class="round-button" @click="togglePanel('more')"></image>
 			</view>
 
-			<view v-if="activePanel" class="extension-panel">
-				<view v-if="activePanel === 'phrases'" class="phrase-list">
-					<view v-for="phrase in commonPhrases" :key="phrase" class="phrase-item" @click="usePhrase(phrase)">
-						{{ phrase }}
+			<view v-if="activePanel" class="extension-panel"
+				:class="{ 'extension-panel--phrases': activePanel === 'phrases' }">
+				<view v-if="activePanel === 'phrases'" class="phrase-panel">
+					<scroll-view scroll-y class="phrase-list">
+						<view v-if="isLoadingCommonPhrases" class="phrase-status">常用语加载中...</view>
+						<view v-else-if="commonPhrasesError" class="phrase-status phrase-status--error"
+							@click="loadCommonPhrases">
+							{{ commonPhrasesError }}
+						</view>
+						<view v-else-if="!commonPhrases.length" class="phrase-status">暂无常用语</view>
+						<view v-for="phrase in commonPhrases" :key="phrase.key" class="phrase-item"
+							@click="usePhrase(phrase.message)">
+							<text class="phrase-message">{{ phrase.message }}</text>
+							<view v-if="isEditingCommonPhrases" class="phrase-item-actions">
+								<image src="../../static/icon_edit.png" class="phrase-item-action-icon" mode="aspectFit"
+									@click.stop="handleCommonPhraseAction('edit', phrase)"></image>
+								<image src="../../static/icon_close.png" class="phrase-item-action-icon"
+									:class="{ 'phrase-item-action-icon--disabled': deletingCommonPhraseId === phrase.id }" mode="aspectFit"
+									@click.stop="handleCommonPhraseAction('delete', phrase)"></image>
+							</view>
+						</view>
+					</scroll-view>
+					<view class="phrase-actions">
+						<view class="phrase-add" @click="openQuickReplyModal">
+							<image src="../../static/icon_common_add.png" class="phrase-add-icon" mode="aspectFit"></image>
+							<text>新增</text>
+						</view>
+						<image src="../../static/icon_setting.png" class="phrase-setting-icon" mode="aspectFit"
+							@click="toggleCommonPhraseEditing"></image>
 					</view>
 				</view>
 
@@ -112,10 +139,38 @@
 				</view>
 			</view>
 		</view>
+
+		<view v-if="showQuickReplyModal" class="quick-reply-mask" @click="closeQuickReplyModal">
+			<view class="quick-reply-dialog" @click.stop>
+				<view class="quick-reply-header">
+					<text class="quick-reply-title">快速回复</text>
+					<text class="quick-reply-close" @click="closeQuickReplyModal">×</text>
+				</view>
+				<view class="quick-reply-body">
+					<textarea v-model="quickReplyText" class="quick-reply-input" maxlength="300"
+						placeholder="可输入300字，可输入您常用回复，请不要填写QQ、微信等联系方式或广告，否则系统将封禁您的账号。"
+						placeholder-class="quick-reply-placeholder" />
+					<text class="quick-reply-count">{{ quickReplyText.length }}/300</text>
+				</view>
+				<view class="quick-reply-footer">
+					<view class="quick-reply-button" :class="{ 'quick-reply-button--disabled': isSavingCommonPhrase }"
+						@click="saveCommonPhrase">
+						{{ isSavingCommonPhrase ? '保存中...' : '保存' }}
+					</view>
+					<view class="quick-reply-button" @click="sendQuickReply">发送</view>
+				</view>
+			</view>
+		</view>
 	</view>
 </template>
 
 <script>
+	import { requestApi } from '../../services/request'
+
+	const COMMON_LANGUAGE_GET_API = 'Chat.CommonLanguage.Get'
+	const COMMON_LANGUAGE_SAVE_API = 'Chat.CommonLanguage.Save'
+	const COMMON_LANGUAGE_DELETE_API = 'Chat.CommonLanguage.Del'
+
 	export default {
 		data() {
 			return {
@@ -230,12 +285,15 @@
 						}
 					]
 				],
-				commonPhrases: [
-					'您好，请问现在方便沟通吗？',
-					'方便发一份简历过来吗？',
-					'我们可以约个时间面试。',
-					'好的，收到后我会尽快回复。'
-				],
+				commonPhrases: [],
+				isLoadingCommonPhrases: false,
+				commonPhrasesError: '',
+				isEditingCommonPhrases: false,
+				showQuickReplyModal: false,
+				quickReplyText: '',
+				quickReplyId: null,
+				isSavingCommonPhrase: false,
+				deletingCommonPhraseId: '',
 				emojis: ['😀', '😁', '😂', '😊', '😍', '🤝', '👍', '🎉', '🌹', '加油', '收到', '谢谢'],
 				moreActions: [{
 						key: 'photo',
@@ -266,6 +324,7 @@
 		onLoad() {
 			const systemInfo = uni.getSystemInfoSync()
 			this.statusBarHeight = systemInfo.statusBarHeight || 0
+			this.loadCommonPhrases()
 		},
 		onReady() {
 			this.$nextTick(() => {
@@ -274,6 +333,50 @@
 			})
 		},
 		methods: {
+			async loadCommonPhrases() {
+				if (this.isLoadingCommonPhrases) return
+
+				this.isLoadingCommonPhrases = true
+				this.commonPhrasesError = ''
+				try {
+					const response = await requestApi({
+						Name: COMMON_LANGUAGE_GET_API,
+						Content: ''
+					})
+					if (!response || Number(response.Code) !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`获取常用语失败，业务错误码：${code}`)
+					}
+
+					const rows = response.Data && response.Data.Rows
+					if (!Array.isArray(rows)) throw new Error('获取常用语失败：接口未返回有效列表')
+
+					this.commonPhrases = rows
+						.map((item, index) => {
+							const message = item && typeof item.Msg === 'string' ? item.Msg.trim() : ''
+							if (!message) return null
+
+							return {
+								id: item.Id ? String(item.Id) : null,
+								key: item.Id ? String(item.Id) : `phrase-${index}`,
+								message,
+								isTop: Boolean(item.IsTop),
+								originalIndex: index
+							}
+						})
+						.filter(Boolean)
+						.sort((left, right) => {
+							if (left.isTop !== right.isTop) return left.isTop ? -1 : 1
+							return left.originalIndex - right.originalIndex
+						})
+				} catch (error) {
+					this.commonPhrases = []
+					this.commonPhrasesError = '常用语加载失败，点击重试'
+					console.error('[Chat] 获取常用语失败', error)
+				} finally {
+					this.isLoadingCommonPhrases = false
+				}
+			},
 			messageAnchor(id) {
 				return `message-${id}`
 			},
@@ -336,20 +439,184 @@
 			togglePanel(panel) {
 				this.inputFocused = false
 				this.activePanel = this.activePanel === panel ? '' : panel
+				if (this.activePanel !== 'phrases') this.isEditingCommonPhrases = false
+				if (this.activePanel === 'phrases' && !this.commonPhrases.length) {
+					this.loadCommonPhrases()
+				}
 				this.$nextTick(() => this.scrollToBottom(false))
 			},
 			closePanel() {
 				if (this.activePanel) this.activePanel = ''
+				this.isEditingCommonPhrases = false
 			},
 			handleInputFocus() {
 				this.inputFocused = true
 				this.activePanel = ''
+				this.isEditingCommonPhrases = false
 				this.$nextTick(() => this.scrollToBottom(false))
 			},
 			usePhrase(phrase) {
 				this.draft = phrase
 				this.activePanel = ''
+				this.isEditingCommonPhrases = false
 				this.inputFocused = true
+			},
+			toggleCommonPhraseEditing() {
+				this.isEditingCommonPhrases = !this.isEditingCommonPhrases
+			},
+			openQuickReplyModal(phrase = null) {
+				this.quickReplyId = phrase && phrase.id ? phrase.id : null
+				this.quickReplyText = phrase && phrase.message ? phrase.message : ''
+				this.isEditingCommonPhrases = false
+				this.showQuickReplyModal = true
+			},
+			closeQuickReplyModal() {
+				if (this.isSavingCommonPhrase) return
+				this.showQuickReplyModal = false
+				this.quickReplyText = ''
+				this.quickReplyId = null
+			},
+			async saveCommonPhrase() {
+				if (this.isSavingCommonPhrase) return
+
+				const message = this.quickReplyText.trim()
+				if (!message) {
+					uni.showToast({
+						title: '请输入常用语内容',
+						icon: 'none'
+					})
+					return
+				}
+
+				this.isSavingCommonPhrase = true
+				try {
+					const response = await requestApi({
+						Name: COMMON_LANGUAGE_SAVE_API,
+						Content: {
+							Id: this.quickReplyId,
+							Msg: message
+						}
+					})
+					const responseCode = response && response.Code !== undefined
+						? Number(response.Code)
+						: NaN
+					const data = response && response.Data ? response.Data : {}
+					const dataCode = data.Code !== undefined ? Number(data.Code) : 0
+
+					if (responseCode === 4400003 || dataCode === 4400003) {
+						throw new Error('最多只能设置10条常用语')
+					}
+					if (responseCode !== 0) {
+						throw new Error(`保存常用语失败，业务错误码：${responseCode}`)
+					}
+					if (dataCode !== 0) {
+						throw new Error(`保存常用语失败，数据错误码：${dataCode}`)
+					}
+
+					this.showQuickReplyModal = false
+					this.quickReplyText = ''
+					this.quickReplyId = null
+					await this.loadCommonPhrases()
+					uni.showToast({
+						title: '保存成功',
+						icon: 'success'
+					})
+				} catch (error) {
+					uni.showToast({
+						title: error && error.message ? error.message : '保存常用语失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 保存常用语失败', error)
+				} finally {
+					this.isSavingCommonPhrase = false
+				}
+			},
+			sendQuickReply() {
+				if (this.isSavingCommonPhrase) return
+
+				const message = this.quickReplyText.trim()
+				if (!message) {
+					uni.showToast({
+						title: '请输入回复内容',
+						icon: 'none'
+					})
+					return
+				}
+
+				this.showQuickReplyModal = false
+				this.quickReplyText = ''
+				this.quickReplyId = null
+				this.draft = message
+				this.sendMessage()
+			},
+			handleCommonPhraseAction(action, phrase) {
+				if (action === 'edit') {
+					this.openQuickReplyModal(phrase)
+					return
+				}
+				if (action === 'delete') {
+					this.confirmDeleteCommonPhrase(phrase)
+					return
+				}
+
+				uni.showToast({
+					title: '常用语设置功能待接入',
+					icon: 'none'
+				})
+			},
+			confirmDeleteCommonPhrase(phrase) {
+				if (this.deletingCommonPhraseId) return
+
+				uni.showModal({
+					title: '删除常用语',
+					content: '确定要删除这条常用语吗？',
+					confirmText: '确认删除',
+					confirmColor: '#e54d42',
+					success: result => {
+						if (result.confirm) this.deleteCommonPhrase(phrase)
+					}
+				})
+			},
+			async deleteCommonPhrase(phrase) {
+				if (this.deletingCommonPhraseId) return
+
+				const phraseId = phrase && phrase.id ? phrase.id : ''
+				if (!phraseId) {
+					uni.showToast({
+						title: '未获取到常用语ID',
+						icon: 'none'
+					})
+					return
+				}
+
+				this.deletingCommonPhraseId = phraseId
+				try {
+					const response = await requestApi({
+						Name: COMMON_LANGUAGE_DELETE_API,
+						Content: {
+							Id: phraseId
+						}
+					})
+					if (!response || Number(response.Code) !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`删除常用语失败，业务错误码：${code}`)
+					}
+
+					this.commonPhrases = this.commonPhrases.filter(item => item.id !== phraseId)
+					uni.showToast({
+						title: '删除成功',
+						icon: 'success'
+					})
+					await this.loadCommonPhrases()
+				} catch (error) {
+					uni.showToast({
+						title: error && error.message ? error.message : '删除常用语失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 删除常用语失败', error)
+				} finally {
+					this.deletingCommonPhraseId = ''
+				}
 			},
 			appendEmoji(emoji) {
 				this.draft += emoji
@@ -655,6 +922,12 @@
 			margin-left: 18rpx;
 		}
 
+		.phrase-icon {
+			flex-shrink: 0;
+			width: 120rpx;
+			height: 70rpx;
+		}
+
 		.message-input {
 			flex: 1;
 			box-sizing: border-box;
@@ -682,15 +955,74 @@
 		padding: 20rpx 28rpx 28rpx;
 		border-top: 1rpx solid #f0f0f0;
 		background: #f7f8fa;
+
+		&.extension-panel--phrases {
+			overflow: hidden;
+			padding: 0;
+			background: #ffffff;
+		}
+	}
+
+	.phrase-panel {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		min-height: 0;
 	}
 
 	.phrase-list {
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+
+		.phrase-status {
+			padding: 36rpx 22rpx;
+			text-align: center;
+			font-size: 26rpx;
+			color: #999999;
+			background: #ffffff;
+			border-radius: 10rpx;
+
+			&.phrase-status--error {
+				color: #2399ed;
+			}
+		}
+
 		.phrase-item {
+			display: flex;
+			align-items: center;
+			box-sizing: border-box;
 			padding: 20rpx 22rpx;
 			font-size: 26rpx;
 			color: #555555;
 			background: #ffffff;
 			border-bottom: 1rpx solid #eeeeee;
+
+			.phrase-message {
+				display: block;
+				flex: 1;
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.phrase-item-actions {
+				display: flex;
+				flex-shrink: 0;
+				align-items: center;
+				gap: 24rpx;
+				margin-left: 24rpx;
+
+				.phrase-item-action-icon {
+					width: 30rpx;
+					height: 30rpx;
+
+					&.phrase-item-action-icon--disabled {
+						opacity: 0.4;
+					}
+				}
+			}
 
 			&:first-child {
 				border-radius: 10rpx 10rpx 0 0;
@@ -699,6 +1031,142 @@
 			&:last-child {
 				border-bottom: none;
 				border-radius: 0 0 10rpx 10rpx;
+			}
+		}
+	}
+
+	.phrase-actions {
+		position: relative;
+		display: flex;
+		flex-shrink: 0;
+		align-items: center;
+		justify-content: center;
+		box-sizing: border-box;
+		height: 72rpx;
+		background: #ffffff;
+		border-top: 1rpx solid #eeeeee;
+
+		.phrase-add {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			font-size: 26rpx;
+			color: #555555;
+
+			.phrase-add-icon {
+				width: 30rpx;
+				height: 30rpx;
+				margin-right: 8rpx;
+			}
+		}
+
+		.phrase-setting-icon {
+			position: absolute;
+			right: 28rpx;
+			width: 32rpx;
+			height: 32rpx;
+		}
+	}
+
+	.quick-reply-mask {
+		position: fixed;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 100;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 40rpx;
+		background: rgba(0, 0, 0, 0.55);
+	}
+
+	.quick-reply-dialog {
+		overflow: hidden;
+		width: 560rpx;
+		background: #ffffff;
+		border-radius: 8rpx;
+		box-shadow: 0 10rpx 40rpx rgba(0, 0, 0, 0.18);
+	}
+
+	.quick-reply-header {
+		position: relative;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 88rpx;
+
+		.quick-reply-title {
+			font-size: 32rpx;
+			font-weight: 600;
+			color: #444444;
+		}
+
+		.quick-reply-close {
+			position: absolute;
+			top: 0;
+			right: 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			width: 80rpx;
+			height: 80rpx;
+			font-size: 42rpx;
+			font-weight: 300;
+			color: #999999;
+		}
+	}
+
+	.quick-reply-body {
+		position: relative;
+		padding: 0 36rpx 28rpx;
+
+		.quick-reply-input {
+			box-sizing: border-box;
+			width: 100%;
+			height: 160rpx;
+			padding: 16rpx 18rpx 40rpx;
+			font-size: 24rpx;
+			line-height: 1.45;
+			color: #555555;
+			background: #f3f5f6;
+			border: 1rpx solid #e2e5e7;
+			border-radius: 4rpx;
+		}
+
+		.quick-reply-placeholder {
+			color: #999999;
+		}
+
+		.quick-reply-count {
+			position: absolute;
+			right: 50rpx;
+			bottom: 40rpx;
+			font-size: 20rpx;
+			color: #aaaaaa;
+		}
+	}
+
+	.quick-reply-footer {
+		display: flex;
+		height: 88rpx;
+		border-top: 1rpx solid #eeeeee;
+
+		.quick-reply-button {
+			display: flex;
+			flex: 1;
+			align-items: center;
+			justify-content: center;
+			font-size: 30rpx;
+			color: #2399ed;
+
+			& + .quick-reply-button {
+				border-left: 1rpx solid #eeeeee;
+			}
+
+			&.quick-reply-button--disabled {
+				opacity: 0.55;
 			}
 		}
 	}

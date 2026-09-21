@@ -75,12 +75,12 @@
         },
         "devServer" : {
             "proxy" : {
-                "/proxy/texhr-openapi" : {
-                    "target" : "http://openapi.texhr.cn",
+                "/api" : {
+                    "target" : "http://openapi.texhr.cn/",
                     "changeOrigin" : true,
                     "secure" : false,
                     "pathRewrite" : {
-                        "^/proxy/texhr-openapi" : ""
+                        "^/api" : ""
                     }
                 }
             }

@@ -24,25 +24,56 @@
 				v-for="conversation in visibleConversations"
 				:key="conversation.id"
 				class="conversation-item"
+				:class="{ 'is-stick-top': conversation.stickTop }"
 				@click="openConversation(conversation)"
 			>
-				<image src="../../static/default_avatar.png" class="avatar"></image>
+				<view class="avatar-wrap">
+					<image :src="conversation.avatar" class="avatar" mode="aspectFill"></image>
+					<text
+						v-if="conversation.unreadCount > 0"
+						class="unread-badge"
+						:class="{ 'is-muted': conversation.mute }"
+					>
+						{{ conversation.mute ? '' : conversation.unreadText }}
+					</text>
+				</view>
 				<view class="conversation-content">
 					<view class="conversation-heading">
 						<text class="company-name">{{ conversation.name }}</text>
 						<text class="time">{{ conversation.time }}</text>
 					</view>
 					<view class="message-row">
-						<text class="read-status">[已读]</text>
 						<text class="message">{{ conversation.message }}</text>
 					</view>
 				</view>
+			</view>
+
+			<view v-if="visibleIsLoading && !visibleConversations.length" class="list-state">
+				<text>正在加载会话...</text>
+			</view>
+			<view v-else-if="visibleLoadError && !visibleConversations.length" class="list-state is-error" @click="retryVisibleConversations">
+				<text>{{ visibleLoadError }}，点击重试</text>
+			</view>
+			<view v-else-if="!visibleConversations.length" class="list-state">
+				<text>{{ activeTab === 'recent' ? '七天内暂无会话' : '暂无历史会话' }}</text>
 			</view>
 		</view>
 	</view>
 </template>
 
 <script>
+	import {
+		NIM_EVENT,
+		getNimLoginError,
+		isNimLoggedIn
+	} from '../../services/nim'
+	import {
+		getAllHistoryConversations,
+		getAllNimConversations,
+		markNimConversationRead,
+		normalizeAndSortConversations
+	} from '../../services/conversation'
+
 	export default {
 		data() {
 			return {
@@ -51,38 +82,208 @@
 					{ key: 'recent', label: '七天内会话' },
 					{ key: 'history', label: '历史会话' }
 				],
-				conversations: {
-					recent: [
-						{
-							id: 1,
-							name: '智联科技',
-							time: '15:04',
-							message: '[自定义消息]'
-						},
-						{
-							id: 2,
-							name: '纺织招聘有限公司',
-							time: '15:59',
-							message: '好的，收到'
-						}
-					],
-					history: [
-						{
-							id: 2,
-							name: '金华智联信息科技有限公司',
-							time: '昨天',
-							message: '[历史消息]'
-						}
-					]
-				}
+				rawConversations: [],
+				historyConversations: [],
+				isLoading: true,
+				isHistoryLoading: true,
+				loadError: '',
+				historyLoadError: '',
+				currentTime: Date.now()
 			}
 		},
 		computed: {
+			conversationList() {
+				return normalizeAndSortConversations(this.rawConversations, this.currentTime)
+			},
+			conversations() {
+				// “七天内会话”使用 SDK 实时会话；“历史会话”使用 texhr 数据库的全部会话接口。
+				return {
+					recent: this.conversationList,
+					history: this.historyConversations
+				}
+			},
 			visibleConversations() {
 				return this.conversations[this.activeTab]
+			},
+			visibleIsLoading() {
+				return this.activeTab === 'history' ? this.isHistoryLoading : this.isLoading
+			},
+			visibleLoadError() {
+				return this.activeTab === 'history' ? this.historyLoadError : this.loadError
 			}
 		},
+		onLoad() {
+			this._conversationPageAlive = true
+			this.bindConversationEvents()
+		},
+		onShow() {
+			// 从聊天页返回时同时刷新 SDK 实时会话与 texhr 历史会话。
+			this.currentTime = Date.now()
+			this.loadConversations()
+			this.loadHistoryConversations()
+		},
+		onUnload() {
+			this._conversationPageAlive = false
+			this.unbindConversationEvents()
+			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
+		},
 		methods: {
+			bindConversationEvents() {
+				// SDK 首次同步、登录完成以及增删改都会驱动列表更新。
+				uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
+				uni.$on(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
+				uni.$on(NIM_EVENT.CONVERSATION_SYNC_FINISHED, this.scheduleConversationReload)
+				uni.$on(NIM_EVENT.CONVERSATION_SYNC_FAILED, this.handleConversationLoadFailed)
+				uni.$on(NIM_EVENT.CONVERSATION_CREATED, this.handleConversationCreated)
+				uni.$on(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
+				uni.$on(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
+			},
+			unbindConversationEvents() {
+				uni.$off(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
+				uni.$off(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
+				uni.$off(NIM_EVENT.CONVERSATION_SYNC_FINISHED, this.scheduleConversationReload)
+				uni.$off(NIM_EVENT.CONVERSATION_SYNC_FAILED, this.handleConversationLoadFailed)
+				uni.$off(NIM_EVENT.CONVERSATION_CREATED, this.handleConversationCreated)
+				uni.$off(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
+				uni.$off(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
+			},
+			handleLoginStatus(status) {
+				if (status !== 1) return
+				this.scheduleConversationReload()
+				this.loadHistoryConversations()
+			},
+			handleNimLoginFailed(error) {
+				this.handleConversationLoadFailed(error)
+				this.isHistoryLoading = false
+				this.historyLoadError = error && (error.message || error.desc)
+					? error.message || error.desc
+					: '历史会话加载失败'
+			},
+			handleConversationLoadFailed(error) {
+				this.isLoading = false
+				this.loadError = error && (error.message || error.desc)
+					? error.message || error.desc
+					: '会话加载失败'
+			},
+			handleConversationCreated(conversation) {
+				this.upsertConversations([conversation])
+			},
+			handleConversationChanged(conversationList) {
+				this.upsertConversations(conversationList)
+			},
+			handleConversationDeleted(conversationIds) {
+				const deletedIdSet = new Set(Array.isArray(conversationIds) ? conversationIds : [])
+				this.rawConversations = this.rawConversations.filter(conversation => {
+					return !deletedIdSet.has(conversation.conversationId)
+				})
+				if (this._conversationLoadPromise) this._conversationReloadPending = true
+			},
+			upsertConversations(conversationList) {
+				if (!Array.isArray(conversationList) || !conversationList.length) return
+
+				const conversationMap = new Map(
+					this.rawConversations.map(conversation => [conversation.conversationId, conversation])
+				)
+				conversationList.forEach(conversation => {
+					if (!conversation || !conversation.conversationId) return
+					const previous = conversationMap.get(conversation.conversationId) || {}
+					conversationMap.set(conversation.conversationId, { ...previous, ...conversation })
+				})
+
+				this.currentTime = Date.now()
+				this.rawConversations = Array.from(conversationMap.values())
+				if (this._conversationLoadPromise) this._conversationReloadPending = true
+			},
+			scheduleConversationReload() {
+				if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
+				// 合并同一批同步产生的多个通知，避免短时间重复分页拉取。
+				this._conversationRefreshTimer = setTimeout(() => {
+					this._conversationRefreshTimer = null
+					this.loadConversations()
+				}, 80)
+			},
+			async loadConversations() {
+				if (!this._conversationPageAlive) return
+				if (!isNimLoggedIn()) {
+					const loginError = getNimLoginError()
+					if (loginError) {
+						this.handleConversationLoadFailed(loginError)
+						return
+					}
+					// App.vue 正在异步登录时保留加载态，成功后由 LOGIN_STATUS 再次触发。
+					this.isLoading = !this.rawConversations.length
+					return
+				}
+				if (this._conversationLoadPromise) {
+					this._conversationReloadPending = true
+					return this._conversationLoadPromise
+				}
+
+				this.isLoading = !this.rawConversations.length
+				this.loadError = ''
+				this._conversationLoadPromise = getAllNimConversations()
+					.then(conversationList => {
+						if (!this._conversationPageAlive) return
+						this.currentTime = Date.now()
+						this.rawConversations = conversationList
+					})
+					.catch(error => {
+						if (!this._conversationPageAlive) return
+						console.error('[NIM] 获取会话列表失败', error)
+						this.handleConversationLoadFailed(error)
+					})
+					.finally(() => {
+						if (this._conversationPageAlive) this.isLoading = false
+						this._conversationLoadPromise = null
+						if (this._conversationReloadPending && this._conversationPageAlive) {
+							this._conversationReloadPending = false
+							this.loadConversations()
+						}
+					})
+
+				return this._conversationLoadPromise
+			},
+			async loadHistoryConversations() {
+				if (!this._conversationPageAlive) return
+				if (!isNimLoggedIn()) {
+					const loginError = getNimLoginError()
+					if (loginError) {
+						this.handleNimLoginFailed(loginError)
+						return
+					}
+					this.isHistoryLoading = !this.historyConversations.length
+					return
+				}
+				if (this._historyConversationLoadPromise) return this._historyConversationLoadPromise
+
+				this.isHistoryLoading = !this.historyConversations.length
+				this.historyLoadError = ''
+				this._historyConversationLoadPromise = getAllHistoryConversations()
+					.then(conversationList => {
+						if (!this._conversationPageAlive) return
+						this.historyConversations = conversationList
+					})
+					.catch(error => {
+						if (!this._conversationPageAlive) return
+						console.error('[NIM] 获取历史会话列表失败', error)
+						this.historyLoadError = error && error.message
+							? error.message
+							: '历史会话加载失败'
+					})
+					.finally(() => {
+						if (this._conversationPageAlive) this.isHistoryLoading = false
+						this._historyConversationLoadPromise = null
+					})
+
+				return this._historyConversationLoadPromise
+			},
+			retryVisibleConversations() {
+				if (this.activeTab === 'history') {
+					this.loadHistoryConversations()
+					return
+				}
+				this.loadConversations()
+			},
 			navigateBack() {
 				const pages = getCurrentPages()
 				if (pages.length > 1) {
@@ -92,7 +293,14 @@
 
 			openConversation(conversation) {
 				uni.navigateTo({
-					url: `/pages/chat/chat?id=${conversation.id}&name=${encodeURIComponent(conversation.name)}`
+					url: `/pages/chat/chat?id=${encodeURIComponent(conversation.id)}&name=${encodeURIComponent(conversation.name)}`,
+					success: () => {
+						// 用户已进入会话，清除未读数；SDK 变更事件会同步刷新列表红点。
+						if (conversation.isHistory) return
+						markNimConversationRead(conversation.id).catch(error => {
+							console.warn('[NIM] 标记会话已读失败', error)
+						})
+					}
 				})
 			}
 		}
@@ -196,12 +404,52 @@
 			box-sizing: border-box;
 			padding: 28rpx;
 
-			.avatar {
+			&.is-stick-top {
+				background: #f7f7f7;
+			}
+
+			.avatar-wrap {
+				position: relative;
 				flex-shrink: 0;
 				width: 80rpx;
 				height: 80rpx;
 				margin: 0 20rpx 0 0;
-				border-radius: 50%;
+
+				.avatar {
+					display: block;
+					width: 80rpx;
+					height: 80rpx;
+					background: #f2f2f2;
+					border-radius: 50%;
+				}
+
+				.unread-badge {
+					position: absolute;
+					top: -12rpx;
+					right: -12rpx;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					box-sizing: border-box;
+					min-width: 32rpx;
+					height: 32rpx;
+					padding: 0 8rpx;
+					font-size: 20rpx;
+					line-height: 32rpx;
+					color: #ffffff;
+					background: #f04444;
+					border: 2rpx solid #ffffff;
+					border-radius: 18rpx;
+
+					&.is-muted {
+						top: -2rpx;
+						right: -2rpx;
+						min-width: 16rpx;
+						width: 16rpx;
+						height: 16rpx;
+						padding: 0;
+					}
+				}
 			}
 
 			.conversation-content {
@@ -240,14 +488,7 @@
 				.message-row {
 					margin-top: 8rpx;
 
-					.read-status {
-						flex-shrink: 0;
-						font-size: 24rpx;
-						color: #1e9df0;
-					}
-
 					.message {
-						margin-left: 8rpx;
 						overflow: hidden;
 						font-size: 24rpx;
 						text-overflow: ellipsis;
@@ -255,6 +496,19 @@
 						color: #888888;
 					}
 				}
+			}
+		}
+
+		.list-state {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			height: 240rpx;
+			font-size: 26rpx;
+			color: #999999;
+
+			&.is-error {
+				color: #1d9bf0;
 			}
 		}
 	}
