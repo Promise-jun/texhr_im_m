@@ -24,56 +24,45 @@
 			:scroll-with-animation="scrollWithAnimation" :upper-threshold="80" @scrolltoupper="loadEarlierMessages"
 			@click="closePanel">
 			<view class="message-content">
-				<view class="load-status">
-					<text v-if="isLoadingHistory">正在加载更早消息...</text>
-					<text v-else-if="historyExhausted">没有更早的消息了</text>
-					<text v-else>下滑加载更多消息</text>
+				<view class="load-status" :class="{ 'load-status--error': historyLoadError }"
+					@click="retryChatLoad">
+					<text v-if="isCheckingLimits">正在检查沟通状态...</text>
+					<text v-else-if="isWaitingForNim">正在连接聊天服务...</text>
+					<text v-else-if="isLoadingHistory">正在加载更早消息...</text>
+					<text v-else-if="historyLoadError">{{ historyLoadError }}，点击重试</text>
+					<text v-else-if="historyExhausted && messages.length">没有更早的消息了</text>
+					<text v-else-if="messages.length">下滑加载更多消息</text>
 				</view>
 
-				<template v-for="message in earlierMessages">
+				<view v-if="!isChatLoading && !historyLoadError && !displayMessages.length" class="empty-state">
+					暂无聊天消息
+				</view>
+
+				<template v-for="message in displayMessages">
 					<view v-if="message.type === 'time'" :id="messageAnchor(message.id)" :key="message.id"
 						class="time-divider">
 						{{ message.content }}
 					</view>
-					<view v-else :id="messageAnchor(message.id)" :key="message.id" class="message-row"
-						:class="message.direction">
-						<image src="../../static/default_avatar.png" class="message-avatar" mode="aspectFill"></image>
-						<view class="message-bubble">{{ message.content }}</view>
-					</view>
-				</template>
-
-				<view class="company-card">
-					<text class="company-name">金华智联信息科技有限公司</text>
-					<view class="company-tags">
-						<view class="item">
-							<image src="../../static/icon_location.png" style="width: 20rpx; height: 24rpx;"></image>
-							<text class="text">西城林芝</text>
-						</view>
-						<view class="item">
-							<image src="../../static/icon_work.png" style="width: 24rpx; height: 22rpx;"></image>
-							<text class="text">经验不限</text>
-						</view>
-						<view class="item">
-							<image src="../../static/icon_edu.png" style="width: 24rpx; height: 21rpx;"></image>
-							<text class="text">学历不限</text>
-						</view>
-					</view>
-					<view class="contact-row">
-						<image src="../../static/default_avatar.png" class="company-logo" mode="aspectFill"></image>
-						<text>叶子 叶子</text>
-					</view>
-					<view class="communication-note">08月13日 10:53由您发起了沟通</view>
-				</view>
-
-				<template v-for="message in messages">
-					<view v-if="message.type === 'time'" :id="messageAnchor(message.id)" :key="message.id"
-						class="time-divider">
+					<view v-else-if="message.type === 'system'" :id="messageAnchor(message.id)" :key="message.id"
+						class="system-message">
 						{{ message.content }}
 					</view>
 					<view v-else :id="messageAnchor(message.id)" :key="message.id" class="message-row"
 						:class="message.direction">
-						<image src="../../static/default_avatar.png" class="message-avatar" mode="aspectFill"></image>
-						<view class="message-bubble">{{ message.content }}</view>
+						<image :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
+							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
+						<view class="message-bubble" :class="{ 'message-bubble--image': message.type === 'image' }">
+							<image v-if="message.type === 'image'" :src="message.url" class="message-image"
+								mode="widthFix" @click.stop="previewImage(message.url)"></image>
+							<view v-else class="message-text">
+								<block v-for="(segment, segmentIndex) in message.segments"
+									:key="segmentIndex">
+									<image v-if="segment.type === 'emoji'" :src="segment.url" :aria-label="segment.key"
+										class="message-emoji" mode="aspectFit"></image>
+									<text v-else class="message-text-copy">{{ segment.content }}</text>
+								</block>
+							</view>
+						</view>
 					</view>
 				</template>
 
@@ -90,7 +79,9 @@
 					cursor-spacing="18" maxlength="500" placeholder="输入消息" @focus="handleInputFocus"
 					@confirm="sendMessage" />
 				<image src="../../static/icon_emoji.png" class="round-button" @click="togglePanel('emoji')"></image>
-				<button v-if="draft" class="send-button" @click="sendMessage">发送</button>
+				<button v-if="draft" class="send-button" :disabled="isSendingMessage" @click="sendMessage">
+					{{ isSendingMessage ? '发送中' : '发送' }}
+				</button>
 				<image v-else src="../../static/icon_add.png" class="round-button" @click="togglePanel('more')"></image>
 			</view>
 
@@ -127,8 +118,9 @@
 				</view>
 
 				<view v-else-if="activePanel === 'emoji'" class="emoji-list">
-					<view v-for="emoji in emojis" :key="emoji" class="emoji-item" @click="appendEmoji(emoji)">
-						{{ emoji }}</view>
+					<view v-for="emoji in emojis" :key="emoji.key" class="emoji-item" @click="appendEmoji(emoji)">
+						<image :src="emoji.url" :aria-label="emoji.key" class="emoji-image" mode="aspectFit"></image>
+					</view>
 				</view>
 
 				<view v-else class="more-list">
@@ -166,14 +158,147 @@
 
 <script>
 	import { requestApi } from '../../services/request'
+	import {
+		NIM_EVENT,
+		getNimLoginError,
+		getNimInstance,
+		isNimLoggedIn
+	} from '../../services/nim'
+	import { markNimConversationRead } from '../../services/conversation'
+	import { NIM_EMOJIS, parseNimEmojiText } from '../../services/nim-emoji'
 
+	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
 	const COMMON_LANGUAGE_GET_API = 'Chat.CommonLanguage.Get'
 	const COMMON_LANGUAGE_SAVE_API = 'Chat.CommonLanguage.Save'
 	const COMMON_LANGUAGE_DELETE_API = 'Chat.CommonLanguage.Del'
+	const HISTORY_PAGE_SIZE = 50
+	const TIME_DIVIDER_INTERVAL = 5 * 60 * 1000
+	const DEFAULT_AVATAR = '/static/default_avatar.png'
+	const MAN_AVATAR = '/static/man_avatar.png'
+	const WOMAN_AVATAR = '/static/woman_avatar.png'
+
+	const MESSAGE_TYPE_LABELS = Object.freeze({
+		2: '[语音]',
+		3: '[视频]',
+		4: '[位置]',
+		5: '[通知消息]',
+		6: '[文件]',
+		7: '[音视频通话]',
+		10: '[提示消息]',
+		11: '[机器人消息]',
+		12: '[通话消息]',
+		100: '[自定义消息]'
+	})
+
+	function parseResponseData(data) {
+		if (typeof data !== 'string') return data || {}
+		if (!data.trim()) return {}
+
+		try {
+			return JSON.parse(data) || {}
+		} catch (error) {
+			throw new Error('沟通限制接口返回的数据格式不正确')
+		}
+	}
+
+	function getMessageId(message) {
+		if (message && message.messageClientId) return String(message.messageClientId)
+		if (message && message.messageServerId) return String(message.messageServerId)
+		return [
+			message && message.senderId,
+			message && message.createTime,
+			message && message.messageType,
+			message && message.text
+		].join('-')
+	}
+
+	function padNumber(value) {
+		return value < 10 ? `0${value}` : String(value)
+	}
+
+	function formatMessageTime(timestamp) {
+		const date = new Date(Number(timestamp) || Date.now())
+		const now = new Date()
+		const time = `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}`
+		const isToday = date.getFullYear() === now.getFullYear()
+			&& date.getMonth() === now.getMonth()
+			&& date.getDate() === now.getDate()
+
+		if (isToday) return time
+		if (date.getFullYear() === now.getFullYear()) {
+			return `${padNumber(date.getMonth() + 1)}月${padNumber(date.getDate())}日 ${time}`
+		}
+		return `${date.getFullYear()}年${padNumber(date.getMonth() + 1)}月${padNumber(date.getDate())}日 ${time}`
+	}
+
+	function getGenderAvatar(gender) {
+		// 云信用户资料约定：1 为男性、2 为女性，0 或未填写表示未知。
+		if (Number(gender) === 1) return MAN_AVATAR
+		if (Number(gender) === 2) return WOMAN_AVATAR
+		return DEFAULT_AVATAR
+	}
+
+	function normalizeNimMessage(message) {
+		const messageType = Number(message && message.messageType)
+		const attachment = message && message.attachment ? message.attachment : {}
+		const id = getMessageId(message)
+		const base = {
+			id,
+			timestamp: Number(message && message.createTime) || 0,
+			direction: message && message.isSelf ? 'self' : 'other'
+		}
+
+		if (messageType === 0) {
+			const content = message && message.text ? message.text : '[文本消息]'
+			return {
+				...base,
+				type: 'text',
+				content,
+				segments: parseNimEmojiText(content)
+			}
+		}
+		if (messageType === 1 && attachment.url) {
+			return {
+				...base,
+				type: 'image',
+				url: attachment.url,
+				content: '[图片]'
+			}
+		}
+		if (messageType === 10) {
+			return {
+				...base,
+				type: 'system',
+				content: message.text || MESSAGE_TYPE_LABELS[messageType]
+			}
+		}
+
+		let content = MESSAGE_TYPE_LABELS[messageType] || '[暂不支持的消息]'
+		if (messageType === 2 && attachment.duration) {
+			content = `[语音] ${Math.max(1, Math.ceil(Number(attachment.duration) / 1000))}秒`
+		} else if (messageType === 6 && attachment.name) {
+			content = `[文件] ${attachment.name}`
+		}
+		return {
+			...base,
+			type: 'text',
+			content,
+			segments: parseNimEmojiText(content)
+		}
+	}
 
 	export default {
 		data() {
 			return {
+				// 页面业务参数：由 /pages/chat/chat?jobId=...&resumeId=... 注入。
+				jobId: '',
+				resumeId: '',
+				enterpriseAccId: '',
+				conversationId: '',
+				selfUserInfo: null,
+				selfAvatar: DEFAULT_AVATAR,
+				otherUserInfo: null,
+				otherAvatar: DEFAULT_AVATAR,
 				actions: [{
 						key: 'resume',
 						label: '发简历',
@@ -207,84 +332,13 @@
 				activePanel: '',
 				scrollIntoView: '',
 				scrollWithAnimation: false,
+				isCheckingLimits: false,
+				isWaitingForNim: false,
 				isLoadingHistory: false,
-				historyIndex: 0,
-				messageSequence: 100,
-				earlierMessages: [],
-				messages: [{
-						id: 1,
-						type: 'text',
-						direction: 'self',
-						content: '您好，我对贵公司职位很感兴趣，希望能有进一步沟通'
-					},
-					{
-						id: 2,
-						type: 'text',
-						direction: 'self',
-						content: '图我'
-					},
-					{
-						id: 3,
-						type: 'text',
-						direction: 'other',
-						content: '你好，对我司该职位感兴趣么？正在急招，请考虑下~'
-					},
-					{
-						id: 4,
-						type: 'text',
-						direction: 'other',
-						content: '图像佳节'
-					},
-					{
-						id: 5,
-						type: 'time',
-						content: '17:07'
-					},
-					{
-						id: 6,
-						type: 'text',
-						direction: 'self',
-						content: '我正在求职，请问贵公司还招人吗？'
-					}
-				],
-				historyBatches: [
-					[{
-							id: 'h1',
-							type: 'time',
-							content: '08月12日 16:42'
-						},
-						{
-							id: 'h2',
-							type: 'text',
-							direction: 'other',
-							content: '您好，看过您的资料，想和您聊聊这个岗位。'
-						},
-						{
-							id: 'h3',
-							type: 'text',
-							direction: 'self',
-							content: '好的，可以先介绍一下工作内容吗？'
-						}
-					],
-					[{
-							id: 'h4',
-							type: 'time',
-							content: '08月11日 09:25'
-						},
-						{
-							id: 'h5',
-							type: 'text',
-							direction: 'self',
-							content: '请问工作地点在哪里？'
-						},
-						{
-							id: 'h6',
-							type: 'text',
-							direction: 'other',
-							content: '工作地点在西城林芝，具体地址面试时可以详聊。'
-						}
-					]
-				],
+				historyExhausted: false,
+				historyLoadError: '',
+				messages: [],
+				isSendingMessage: false,
 				commonPhrases: [],
 				isLoadingCommonPhrases: false,
 				commonPhrasesError: '',
@@ -294,7 +348,7 @@
 				quickReplyId: null,
 				isSavingCommonPhrase: false,
 				deletingCommonPhraseId: '',
-				emojis: ['😀', '😁', '😂', '😊', '😍', '🤝', '👍', '🎉', '🌹', '加油', '收到', '谢谢'],
+				emojis: NIM_EMOJIS,
 				moreActions: [{
 						key: 'photo',
 						label: '图片',
@@ -314,25 +368,290 @@
 			}
 		},
 		computed: {
-			historyExhausted() {
-				return this.historyIndex >= this.historyBatches.length
+			isChatLoading() {
+				return this.isCheckingLimits || this.isWaitingForNim || this.isLoadingHistory
+			},
+			displayMessages() {
+				const result = []
+				let previousTimestamp = 0
+
+				this.messages.forEach(rawMessage => {
+					const message = normalizeNimMessage(rawMessage)
+					if (!previousTimestamp || message.timestamp - previousTimestamp >= TIME_DIVIDER_INTERVAL) {
+						result.push({
+							id: `time-${message.id}`,
+							type: 'time',
+							content: formatMessageTime(message.timestamp)
+						})
+					}
+					result.push(message)
+					previousTimestamp = message.timestamp
+				})
+				console.log(666, this.messages)
+				return result
 			},
 			scrollTopStyle() {
 				return `calc(${this.statusBarHeight}px + 220rpx)`
 			}
 		},
-		onLoad() {
+		async onLoad(options = {}) {
+			// uni-app 会把 URL 查询参数传给 onLoad；同时兼容大小写，避免外部链接差异。
+			this.jobId = String(options.jobId || options.JobId || '').trim()
+			this.resumeId = String(options.resumeId || options.ResumeId || '').trim()
 			const systemInfo = uni.getSystemInfoSync()
 			this.statusBarHeight = systemInfo.statusBarHeight || 0
+			this._chatPageAlive = true
+			this.bindNimLoginEvents()
 			this.loadCommonPhrases()
+			await this.loadChatAccess()
 		},
-		onReady() {
-			this.$nextTick(() => {
-				this.scrollToBottom(false)
-				setTimeout(() => this.scrollToBottom(false), 60)
-			})
+		onUnload() {
+			this._chatPageAlive = false
+			this.unbindNimLoginEvents()
+			this.unbindMessageEvents()
 		},
 		methods: {
+			bindNimLoginEvents() {
+				// App.vue 中的云信登录是异步的，页面需要在登录完成后继续初始化会话。
+				uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleNimLoginStatus)
+				uni.$on(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
+			},
+			unbindNimLoginEvents() {
+				uni.$off(NIM_EVENT.LOGIN_STATUS, this.handleNimLoginStatus)
+				uni.$off(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
+			},
+			handleNimLoginStatus(status) {
+				if (Number(status) !== 1 || !this.enterpriseAccId) return
+				this.prepareNimConversation()
+			},
+			handleNimLoginFailed(error) {
+				if (!this.enterpriseAccId || this.conversationId) return
+				this.isWaitingForNim = false
+				this.historyLoadError = error && (error.message || error.desc)
+					? error.message || error.desc
+					: '聊天服务连接失败'
+			},
+			async loadChatAccess() {
+				if (this.isCheckingLimits) return
+
+				if (!this.jobId || !this.resumeId) {
+					this.historyLoadError = '缺少 jobId 或 resumeId'
+					return
+				}
+
+				this.isCheckingLimits = true
+				this.historyLoadError = ''
+				try {
+					// 先校验当前职位与简历是否允许进入聊天，再决定是否读取云信消息。
+					const response = await requestApi({
+						Name: CHAT_LIMITS_API,
+						Content: {
+							JobId: this.jobId,
+							ResumeId: this.resumeId
+						}
+					})
+					if (!response || Number(response.Code) !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`获取沟通状态失败，业务错误码：${code}`)
+					}
+
+					const data = parseResponseData(response.Data)
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error(`获取沟通状态失败，数据错误码：${data.Code}`)
+					}
+					// 兼容 SuccessStep/EnterpriseAccId 位于 Data 或响应根节点的两种返回结构。
+					const successStep = data.SuccessStep || response.SuccessStep
+					if (successStep) {
+						this.historyExhausted = true
+						uni.showModal({
+							content: String(successStep.Tips || ''),
+							confirmText: String(successStep.StepName || '确定'),
+							showCancel: false
+						})
+						return
+					}
+
+					const enterpriseAccId = data.EnterpriseAccId !== undefined
+						? data.EnterpriseAccId
+						: response.EnterpriseAccId
+					this.enterpriseAccId = enterpriseAccId === undefined || enterpriseAccId === null
+						? ''
+						: String(enterpriseAccId).trim()
+					if (!this.enterpriseAccId) {
+						throw new Error('获取沟通状态失败：未返回 EnterpriseAccId')
+					}
+
+					await this.prepareNimConversation()
+				} catch (error) {
+					if (!this._chatPageAlive) return
+					this.historyLoadError = error && error.message ? error.message : '聊天加载失败'
+					console.error('[Chat] 获取聊天权限失败', error)
+				} finally {
+					if (this._chatPageAlive) this.isCheckingLimits = false
+				}
+			},
+			async prepareNimConversation() {
+				if (!this.enterpriseAccId || this._conversationInitPromise) {
+					return this._conversationInitPromise
+				}
+				if (!isNimLoggedIn()) {
+					const loginError = getNimLoginError()
+					if (loginError) {
+						this.isWaitingForNim = false
+						this.historyLoadError = loginError.message || loginError.desc || '聊天服务连接失败'
+						return
+					}
+					// 云信仍在登录时保留等待态，登录事件会重新进入本方法。
+					this.isWaitingForNim = true
+					return
+				}
+
+				this.isWaitingForNim = false
+				this.historyLoadError = ''
+				this._conversationInitPromise = (async () => {
+					const nim = getNimInstance()
+					this.conversationId = nim.V2NIMConversationIdUtil.p2pConversationId(this.enterpriseAccId)
+					// 双方用户资料与历史消息并行获取，头像返回后 Vue 会自动刷新消息头像。
+					this.loadSelfUserProfile()
+					this.loadOtherUserProfile()
+					this.bindMessageEvents()
+					await this.loadEarlierMessages(true)
+					// 清除未读失败不影响历史消息展示，只记录日志供后续排查。
+					await markNimConversationRead(this.conversationId).catch(error => {
+						console.warn('[Chat] 清除会话未读数失败', error)
+					})
+				})().catch(error => {
+					if (!this._chatPageAlive) return
+					this.historyLoadError = error && error.message ? error.message : '历史消息加载失败'
+					console.error('[Chat] 初始化云信会话失败', error)
+				}).finally(() => {
+					this._conversationInitPromise = null
+				})
+
+				return this._conversationInitPromise
+			},
+			async loadSelfUserProfile() {
+				if (this._selfUserProfilePromise) return this._selfUserProfilePromise
+				if (!isNimLoggedIn()) return
+
+				const nim = getNimInstance()
+				const loginService = nim.V2NIMLoginService
+				const accountId = loginService && typeof loginService.getLoginUser === 'function'
+					? loginService.getLoginUser()
+					: ''
+				const userService = nim.V2NIMUserService
+				if (!accountId || !userService || typeof userService.getUserListFromCloud !== 'function') {
+					console.warn('[Chat] 无法获取云信个人资料：用户服务或登录账号不可用')
+					return
+				}
+
+				// 从网易云端获取最新的本人资料，不只读取 SDK 本地缓存。
+				this._selfUserProfilePromise = userService.getUserListFromCloud([accountId])
+					.then(userList => {
+						if (!this._chatPageAlive) return
+						const selfUser = (Array.isArray(userList) ? userList : [])
+							.find(user => user && user.accountId === accountId)
+						if (!selfUser) return
+
+						this.selfUserInfo = selfUser
+						const avatar = typeof selfUser.avatar === 'string' ? selfUser.avatar.trim() : ''
+						// 未设置云信头像时，根据用户性别展示对应的本地默认头像。
+						this.selfAvatar = avatar || getGenderAvatar(selfUser.gender)
+					})
+					.catch(error => {
+						// 个人资料失败不阻塞聊天消息，头像继续使用本地默认图。
+						console.warn('[Chat] 获取云信个人资料失败', error)
+					})
+					.finally(() => {
+						this._selfUserProfilePromise = null
+					})
+
+				return this._selfUserProfilePromise
+			},
+			async loadOtherUserProfile() {
+				if (this._otherUserProfilePromise) return this._otherUserProfilePromise
+				if (!isNimLoggedIn() || !this.enterpriseAccId) return
+
+				const userService = getNimInstance().V2NIMUserService
+				if (!userService || typeof userService.getUserListFromCloud !== 'function') {
+					this.otherUserInfo = null
+					this.otherAvatar = DEFAULT_AVATAR
+					console.warn('[Chat] 无法获取对方云信资料：用户服务不可用')
+					return
+				}
+
+				// EnterpriseAccId 即聊天对方的云信账号，从云端获取最新用户资料。
+				this._otherUserProfilePromise = userService.getUserListFromCloud([this.enterpriseAccId])
+					.then(userList => {
+						if (!this._chatPageAlive) return
+						const otherUser = (Array.isArray(userList) ? userList : [])
+							.find(user => user && user.accountId === this.enterpriseAccId)
+						this.otherUserInfo = otherUser || null
+						const avatar = otherUser && typeof otherUser.avatar === 'string'
+							? otherUser.avatar.trim()
+							: ''
+						this.otherAvatar = avatar || DEFAULT_AVATAR
+					})
+					.catch(error => {
+						// 获取失败不阻塞聊天消息，对方头像统一回退本地默认图。
+						if (this._chatPageAlive) {
+							this.otherUserInfo = null
+							this.otherAvatar = DEFAULT_AVATAR
+						}
+						console.warn('[Chat] 获取对方云信资料失败', error)
+					})
+					.finally(() => {
+						this._otherUserProfilePromise = null
+					})
+
+				return this._otherUserProfilePromise
+			},
+			handleAvatarError(direction) {
+				if (direction === 'self') {
+					const gender = this.selfUserInfo ? this.selfUserInfo.gender : 0
+					this.selfAvatar = getGenderAvatar(gender)
+					return
+				}
+				this.otherAvatar = DEFAULT_AVATAR
+			},
+			bindMessageEvents() {
+				if (this._messageEventsBound) return
+
+				const messageService = getNimInstance().V2NIMMessageService
+				if (!messageService) throw new Error('当前网易云信 SDK 不支持消息服务')
+				messageService.on('onReceiveMessages', this.handleReceiveMessages)
+				this._messageService = messageService
+				this._messageEventsBound = true
+			},
+			unbindMessageEvents() {
+				if (!this._messageEventsBound || !this._messageService) return
+				this._messageService.off('onReceiveMessages', this.handleReceiveMessages)
+				this._messageService = null
+				this._messageEventsBound = false
+			},
+			handleReceiveMessages(messageList) {
+				// SDK 会同时推送其他会话的新消息，详情页只接收当前会话的数据。
+				const currentMessages = (Array.isArray(messageList) ? messageList : [])
+					.filter(message => message && message.conversationId === this.conversationId)
+				if (!currentMessages.length) return
+
+				this.mergeMessages(currentMessages)
+				markNimConversationRead(this.conversationId).catch(error => {
+					console.warn('[Chat] 清除会话未读数失败', error)
+				})
+				this.$nextTick(() => this.scrollToBottom(true))
+			},
+			mergeMessages(messageList) {
+				const messageMap = new Map(this.messages.map(message => [getMessageId(message), message]))
+				messageList.forEach(message => {
+					if (!message || message.isDelete) return
+					messageMap.set(getMessageId(message), message)
+				})
+				this.messages = Array.from(messageMap.values()).sort((left, right) => {
+					const timeDiff = (Number(left.createTime) || 0) - (Number(right.createTime) || 0)
+					return timeDiff || getMessageId(left).localeCompare(getMessageId(right))
+				})
+			},
 			async loadCommonPhrases() {
 				if (this.isLoadingCommonPhrases) return
 
@@ -378,7 +697,8 @@
 				}
 			},
 			messageAnchor(id) {
-				return `message-${id}`
+				// SDK 消息 ID 可能带特殊字符，转换后再作为 scroll-into-view 的锚点。
+				return `message-${String(id).replace(/[^a-zA-Z0-9_-]/g, '-')}`
 			},
 			navigateBack() {
 				const pages = getCurrentPages()
@@ -411,20 +731,52 @@
 					icon: 'none'
 				})
 			},
-			loadEarlierMessages() {
-				if (this.isLoadingHistory || this.historyExhausted) return
+			async loadEarlierMessages(initialLoad = false) {
+				if (this.isLoadingHistory || this.historyExhausted || !this.conversationId) return
 
 				this.isLoadingHistory = true
-				const anchorMessage = this.earlierMessages[0] || this.messages[0]
-				const anchorId = anchorMessage ? this.messageAnchor(anchorMessage.id) : ''
+				this.historyLoadError = ''
+				const oldestMessage = this.messages[0] || null
+				const anchorId = oldestMessage ? this.messageAnchor(getMessageId(oldestMessage)) : ''
+				try {
+					// direction=0 表示按时间倒序向前查询，anchorMessage 不会被重复返回。
+					const messageList = await getNimInstance().V2NIMMessageService.getMessageList({
+						conversationId: this.conversationId,
+						limit: HISTORY_PAGE_SIZE,
+						anchorMessage: oldestMessage || undefined,
+						direction: 0
+					})
+					const historyMessages = Array.isArray(messageList) ? messageList : []
+					this.mergeMessages(historyMessages)
+					this.historyExhausted = historyMessages.length < HISTORY_PAGE_SIZE
 
-				setTimeout(() => {
-					const batch = this.historyBatches[this.historyIndex] || []
-					this.earlierMessages = batch.concat(this.earlierMessages)
-					this.historyIndex += 1
-					this.isLoadingHistory = false
-					if (anchorId) this.scrollToAnchor(anchorId, false)
-				}, 450)
+					this.$nextTick(() => {
+						if (initialLoad) {
+							this.scrollToBottom(false)
+							setTimeout(() => this.scrollToBottom(false), 60)
+						} else if (anchorId) {
+							this.scrollToAnchor(anchorId, false)
+						}
+					})
+				} catch (error) {
+					if (!this._chatPageAlive) return
+					this.historyLoadError = error && error.message ? error.message : '历史消息加载失败'
+					console.error('[Chat] 获取网易云历史消息失败', error)
+				} finally {
+					if (this._chatPageAlive) this.isLoadingHistory = false
+				}
+			},
+			retryChatLoad() {
+				if (!this.historyLoadError || this.isChatLoading) return
+				if (!this.enterpriseAccId) {
+					this.loadChatAccess()
+					return
+				}
+				if (!this.conversationId) {
+					this.prepareNimConversation()
+					return
+				}
+				this.loadEarlierMessages(!this.messages.length)
 			},
 			scrollToAnchor(anchorId, animated) {
 				this.scrollWithAnimation = Boolean(animated)
@@ -619,9 +971,12 @@
 				}
 			},
 			appendEmoji(emoji) {
-				this.draft += emoji
+				if (!emoji || !emoji.key) return
+				this.draft += emoji.key
 			},
-			sendMessage() {
+			async sendMessage() {
+				if (this.isSendingMessage) return
+
 				const content = this.draft.trim()
 				if (!content) {
 					uni.showToast({
@@ -630,17 +985,41 @@
 					})
 					return
 				}
+				if (!this.conversationId || !isNimLoggedIn()) {
+					uni.showToast({
+						title: '聊天服务尚未就绪',
+						icon: 'none'
+					})
+					return
+				}
 
-				this.messageSequence += 1
-				this.messages.push({
-					id: `new-${this.messageSequence}`,
-					type: 'text',
-					direction: 'self',
-					content
+				this.isSendingMessage = true
+				try {
+					const nim = getNimInstance()
+					const message = nim.V2NIMMessageCreator.createTextMessage(content)
+					const result = await nim.V2NIMMessageService.sendMessage(message, this.conversationId)
+					if (!result || !result.message) throw new Error('消息发送失败：SDK 未返回消息')
+
+					this.mergeMessages([result.message])
+					this.draft = ''
+					this.activePanel = ''
+					this.$nextTick(() => this.scrollToBottom(true))
+				} catch (error) {
+					uni.showToast({
+						title: error && error.message ? error.message : '消息发送失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 发送云信消息失败', error)
+				} finally {
+					this.isSendingMessage = false
+				}
+			},
+			previewImage(url) {
+				if (!url) return
+				uni.previewImage({
+					current: url,
+					urls: [url]
 				})
-				this.draft = ''
-				this.activePanel = ''
-				this.$nextTick(() => this.scrollToBottom(true))
 			},
 			handleMoreAction(item) {
 				this.activePanel = ''
@@ -769,54 +1148,19 @@
 		height: 60rpx;
 		font-size: 22rpx;
 		color: #a0a4a8;
+
+		&.load-status--error {
+			color: #2399ed;
+		}
 	}
 
-	.company-card {
-		box-sizing: border-box;
-		margin: 0 -8rpx 36rpx;
-		padding: 20rpx 26rpx 26rpx;
-		background: #ffffff;
-
-		.company-name {
-			display: block;
-			font-size: 28rpx;
-			color: #696969;
-		}
-
-		.company-tags {
-			display: flex;
-			flex-wrap: wrap;
-			gap: 12rpx 24rpx;
-			margin-top: 20rpx;
-			.text {
-				margin-left: 8rpx;
-				font-size: 24rpx;
-				color: #777777;
-			}
-		}
-
-		.contact-row {
-			display: flex;
-			align-items: center;
-			margin-top: 24rpx;
-			font-size: 28rpx;
-			color: #555555;
-
-			.company-logo {
-				width: 40rpx;
-				height: 40rpx;
-				margin-right: 12rpx;
-				border-radius: 50%;
-			}
-		}
-
-		.communication-note {
-			margin-top: 20rpx;
-			padding-top: 18rpx;
-			border-top: 1rpx solid #eeeeee;
-			font-size: 22rpx;
-			color: #a0a0a0;
-		}
+	.empty-state {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 240rpx;
+		font-size: 24rpx;
+		color: #a0a4a8;
 	}
 
 	.time-divider {
@@ -824,6 +1168,19 @@
 		text-align: center;
 		font-size: 22rpx;
 		color: #a8a8a8;
+	}
+
+	.system-message {
+		box-sizing: border-box;
+		max-width: 82%;
+		margin: 0 auto 28rpx;
+		padding: 10rpx 18rpx;
+		text-align: center;
+		font-size: 22rpx;
+		line-height: 1.5;
+		color: #92979c;
+		background: rgba(0, 0, 0, 0.04);
+		border-radius: 8rpx;
 	}
 
 	.message-row {
@@ -847,6 +1204,40 @@
 			line-height: 1.65;
 			word-break: break-all;
 			border-radius: 8rpx;
+
+			&.message-bubble--image {
+				min-height: 0;
+				padding: 0;
+				overflow: hidden;
+				background: transparent;
+			}
+		}
+
+		.message-image {
+			display: block;
+			width: 320rpx;
+			max-height: 420rpx;
+		}
+
+		.message-text {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			max-width: 100%;
+		}
+
+		.message-text-copy {
+			max-width: 100%;
+			white-space: pre-wrap;
+			word-break: break-all;
+		}
+
+		.message-emoji {
+			flex-shrink: 0;
+			width: 44rpx;
+			height: 44rpx;
+			margin: 0 2rpx;
+			vertical-align: middle;
 		}
 
 		&.other {
@@ -920,6 +1311,11 @@
 
 		.send-button {
 			margin-left: 18rpx;
+
+			&[disabled] {
+				color: #ffffff;
+				background: #8bc9f3;
+			}
 		}
 
 		.phrase-icon {
@@ -1181,9 +1577,13 @@
 			align-items: center;
 			justify-content: center;
 			height: 64rpx;
-			font-size: 32rpx;
 			background: #ffffff;
 			border-radius: 10rpx;
+
+			.emoji-image {
+				width: 48rpx;
+				height: 48rpx;
+			}
 		}
 	}
 
