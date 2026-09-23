@@ -24,8 +24,7 @@
 			:scroll-with-animation="scrollWithAnimation" :upper-threshold="80" @scrolltoupper="loadEarlierMessages"
 			@click="closePanel">
 			<view class="message-content">
-				<view class="load-status" :class="{ 'load-status--error': historyLoadError }"
-					@click="retryChatLoad">
+				<view class="load-status" :class="{ 'load-status--error': historyLoadError }" @click="retryChatLoad">
 					<text v-if="isCheckingLimits">正在检查沟通状态...</text>
 					<text v-else-if="isWaitingForNim">正在连接聊天服务...</text>
 					<text v-else-if="isLoadingHistory">正在加载更早消息...</text>
@@ -55,8 +54,7 @@
 							<image v-if="message.type === 'image'" :src="message.url" class="message-image"
 								mode="widthFix" @click.stop="previewImage(message.url)"></image>
 							<view v-else class="message-text">
-								<block v-for="(segment, segmentIndex) in message.segments"
-									:key="segmentIndex">
+								<block v-for="(segment, segmentIndex) in message.segments" :key="segmentIndex">
 									<image v-if="segment.type === 'emoji'" :src="segment.url" :aria-label="segment.key"
 										class="message-emoji" mode="aspectFit"></image>
 									<text v-else class="message-text-copy">{{ segment.content }}</text>
@@ -72,14 +70,18 @@
 
 		<view class="composer">
 			<view class="composer-main">
-				<image v-if="activePanel === 'phrases'" src="../../static/icon_key.png" class="phrase-icon"
-					mode="aspectFit" @click="togglePanel('phrases')"></image>
+				<image v-if="isVoiceMode || activePanel === 'phrases'" src="../../static/icon_key.png"
+					class="phrase-icon" mode="aspectFit" @click="handleKeyboardButton"></image>
 				<button v-else class="phrase-button" @click="togglePanel('phrases')">常用语</button>
-				<input v-model.trim="draft" class="message-input" :focus="inputFocused" confirm-type="send"
-					cursor-spacing="18" maxlength="500" placeholder="输入消息" @focus="handleInputFocus"
+				<input v-if="!isVoiceMode" v-model.trim="draft" class="message-input" :focus="inputFocused"
+					confirm-type="send" cursor-spacing="18" maxlength="500" placeholder="输入消息" @focus="handleInputFocus"
 					@confirm="sendMessage" />
+				<image v-if="!isVoiceMode" src="../../static/icon_audio_btn.png" class="round-button" mode="aspectFit"
+					@click="enterVoiceMode"></image>
+				<button v-else class="voice-button">按住 说话</button>
 				<image src="../../static/icon_emoji.png" class="round-button" @click="togglePanel('emoji')"></image>
-				<button v-if="draft" class="send-button" :disabled="isSendingMessage" @click="sendMessage">
+				<button v-if="!isVoiceMode && draft" class="send-button" :disabled="isSendingMessage"
+					@click="sendMessage">
 					{{ isSendingMessage ? '发送中' : '发送' }}
 				</button>
 				<image v-else src="../../static/icon_add.png" class="round-button" @click="togglePanel('more')"></image>
@@ -102,14 +104,15 @@
 								<image src="../../static/icon_edit.png" class="phrase-item-action-icon" mode="aspectFit"
 									@click.stop="handleCommonPhraseAction('edit', phrase)"></image>
 								<image src="../../static/icon_close.png" class="phrase-item-action-icon"
-									:class="{ 'phrase-item-action-icon--disabled': deletingCommonPhraseId === phrase.id }" mode="aspectFit"
-									@click.stop="handleCommonPhraseAction('delete', phrase)"></image>
+									:class="{ 'phrase-item-action-icon--disabled': deletingCommonPhraseId === phrase.id }"
+									mode="aspectFit" @click.stop="handleCommonPhraseAction('delete', phrase)"></image>
 							</view>
 						</view>
 					</scroll-view>
 					<view class="phrase-actions">
 						<view class="phrase-add" @click="openQuickReplyModal">
-							<image src="../../static/icon_common_add.png" class="phrase-add-icon" mode="aspectFit"></image>
+							<image src="../../static/icon_common_add.png" class="phrase-add-icon" mode="aspectFit">
+							</image>
 							<text>新增</text>
 						</view>
 						<image src="../../static/icon_setting.png" class="phrase-setting-icon" mode="aspectFit"
@@ -153,26 +156,73 @@
 				</view>
 			</view>
 		</view>
+
+		<view v-if="showSendResumeModal" class="send-resume-mask" @click="closeSendResumeModal">
+			<view class="send-resume-dialog" @click.stop>
+				<view class="send-resume-content">
+					<text class="send-resume-title">确认发送</text>
+					<text class="send-resume-tip">你的简历将发送给企业</text>
+					<view class="send-resume-job">
+						<view class="send-resume-job-item send-resume-job-item--name">
+							<image src="/static/icon_send_resume_job.png" class="send-resume-job-icon" mode="aspectFill"
+								style="width: 22rpx; height: 20rpx;"></image>
+							<text class="send-resume-job-text">{{ sendResumeJob.jobName || '-' }}</text>
+						</view>
+						<view class="send-resume-job-item">
+							<image src="/static/icon_send_resume_location.png" class="send-resume-job-icon"
+								mode="aspectFill" style="width: 20rpx; height: 24rpx;"></image>
+							<text class="send-resume-job-text">{{ sendResumeJob.location || '-' }}</text>
+						</view>
+						<view class="send-resume-job-item">
+							<image src="/static/icon_send_resume_salary.png" class="send-resume-job-icon"
+								mode="aspectFill" style="width: 24rpx; height: 24rpx;"></image>
+							<text class="send-resume-job-text">{{ sendResumeJob.salary || '-' }}</text>
+						</view>
+					</view>
+				</view>
+				<view class="send-resume-actions">
+					<view class="send-resume-button send-resume-button--cancel" @click="closeSendResumeModal">取消</view>
+					<view class="send-resume-button send-resume-button--confirm" @click="confirmSendResume">发送</view>
+				</view>
+			</view>
+		</view>
 	</view>
 </template>
 
 <script>
-	import { requestApi } from '../../services/request'
+	import {
+		requestApi
+	} from '../../services/request'
 	import {
 		NIM_EVENT,
 		getNimLoginError,
 		getNimInstance,
 		isNimLoggedIn
 	} from '../../services/nim'
-	import { markNimConversationRead } from '../../services/conversation'
-	import { NIM_EMOJIS, parseNimEmojiText } from '../../services/nim-emoji'
+	import {
+		markNimConversationRead
+	} from '../../services/conversation'
+	import {
+		NIM_EMOJIS,
+		parseNimEmojiText
+	} from '../../services/nim-emoji'
 
 	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
+	const CHECK_SEND_RESUME_API = 'Chat.Person.CheckSendResume'
+	const GET_SEND_RESUME_JOB_API = 'Chat.Chat.GetJob'
+	// 接口文档中的方法名为 Chat.Peson.Delivery（Peson 为文档原始拼写）。
+	const DELIVERY_RESUME_API = 'Chat.Peson.Delivery'
 	const COMMON_LANGUAGE_GET_API = 'Chat.CommonLanguage.Get'
 	const COMMON_LANGUAGE_SAVE_API = 'Chat.CommonLanguage.Save'
 	const COMMON_LANGUAGE_DELETE_API = 'Chat.CommonLanguage.Del'
 	const HISTORY_PAGE_SIZE = 50
 	const TIME_DIVIDER_INTERVAL = 5 * 60 * 1000
+	// 云信图片消息的业务上限：超过 25 MB 时不进入压缩和上传流程。
+	const MAX_IMAGE_SIZE = 25 * 1024 * 1024
+	// 图片压缩质量：H5 Canvas 与 App/小程序原生压缩统一使用 80%。
+	const IMAGE_COMPRESS_QUALITY = 80
+	// H5 Canvas 压缩时限制长边，避免超大分辨率图片占用过多内存和流量。
+	const H5_IMAGE_MAX_EDGE = 1920
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const MAN_AVATAR = '/static/man_avatar.png'
 	const WOMAN_AVATAR = '/static/woman_avatar.png'
@@ -190,14 +240,14 @@
 		100: '[自定义消息]'
 	})
 
-	function parseResponseData(data) {
+	function parseResponseData(data, errorMessage = '接口返回的数据格式不正确') {
 		if (typeof data !== 'string') return data || {}
 		if (!data.trim()) return {}
 
 		try {
 			return JSON.parse(data) || {}
 		} catch (error) {
-			throw new Error('沟通限制接口返回的数据格式不正确')
+			throw new Error(errorMessage)
 		}
 	}
 
@@ -220,9 +270,9 @@
 		const date = new Date(Number(timestamp) || Date.now())
 		const now = new Date()
 		const time = `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}`
-		const isToday = date.getFullYear() === now.getFullYear()
-			&& date.getMonth() === now.getMonth()
-			&& date.getDate() === now.getDate()
+		const isToday = date.getFullYear() === now.getFullYear() &&
+			date.getMonth() === now.getMonth() &&
+			date.getDate() === now.getDate()
 
 		if (isToday) return time
 		if (date.getFullYear() === now.getFullYear()) {
@@ -236,6 +286,27 @@
 		if (Number(gender) === 1) return MAN_AVATAR
 		if (Number(gender) === 2) return WOMAN_AVATAR
 		return DEFAULT_AVATAR
+	}
+
+	function getImageFileName(filePath) {
+		const pathWithoutQuery = String(filePath || '').split('?')[0]
+		const pathParts = pathWithoutQuery.split(/[\\/]/)
+		let fileName = pathParts[pathParts.length - 1] || `image_${Date.now()}.jpg`
+		try {
+			fileName = decodeURIComponent(fileName)
+		} catch (error) {
+			// 临时文件路径未编码时直接使用原始文件名即可。
+		}
+		return /\.[a-z0-9]+$/i.test(fileName) ? fileName : `${fileName}.jpg`
+	}
+
+	function getCompressedImageName(filePath, sourceFile) {
+		const nestedFile = sourceFile && (sourceFile.file || sourceFile.raw)
+		const originalName = sourceFile && sourceFile.name ?
+			String(sourceFile.name) :
+			nestedFile && nestedFile.name ? String(nestedFile.name) :
+			getImageFileName(filePath)
+		return `${originalName.replace(/\.[^.]+$/, '') || `image_${Date.now()}`}.jpg`
 	}
 
 	function normalizeNimMessage(message) {
@@ -293,6 +364,7 @@
 				// 页面业务参数：由 /pages/chat/chat?jobId=...&resumeId=... 注入。
 				jobId: '',
 				resumeId: '',
+				personAccId: '',
 				enterpriseAccId: '',
 				conversationId: '',
 				selfUserInfo: null,
@@ -310,7 +382,7 @@
 						label: '置顶',
 						iconUrl: '/static/b.png',
 						style: 'width: 37rpx; height: 37rpx;'
-						
+
 					},
 					{
 						key: 'company',
@@ -328,6 +400,7 @@
 				isPinned: false,
 				draft: '',
 				inputFocused: false,
+				isVoiceMode: false,
 				statusBarHeight: 0,
 				activePanel: '',
 				scrollIntoView: '',
@@ -339,6 +412,8 @@
 				historyLoadError: '',
 				messages: [],
 				isSendingMessage: false,
+				isSelectingImage: false,
+				imageUploadProgress: 0,
 				commonPhrases: [],
 				isLoadingCommonPhrases: false,
 				commonPhrasesError: '',
@@ -348,6 +423,15 @@
 				quickReplyId: null,
 				isSavingCommonPhrase: false,
 				deletingCommonPhraseId: '',
+				isLoadingSendResumeJob: false,
+				showSendResumeModal: false,
+				isSendingResume: false,
+				sendResumeJob: {
+					jobId: '',
+					jobName: '',
+					location: '',
+					salary: ''
+				},
 				emojis: NIM_EMOJIS,
 				moreActions: [{
 						key: 'photo',
@@ -403,6 +487,7 @@
 			this._chatPageAlive = true
 			this.bindNimLoginEvents()
 			this.loadCommonPhrases()
+			this.loadSendResumeStatus()
 			await this.loadChatAccess()
 		},
 		onUnload() {
@@ -427,9 +512,9 @@
 			handleNimLoginFailed(error) {
 				if (!this.enterpriseAccId || this.conversationId) return
 				this.isWaitingForNim = false
-				this.historyLoadError = error && (error.message || error.desc)
-					? error.message || error.desc
-					: '聊天服务连接失败'
+				this.historyLoadError = error && (error.message || error.desc) ?
+					error.message || error.desc :
+					'聊天服务连接失败'
 			},
 			async loadChatAccess() {
 				if (this.isCheckingLimits) return
@@ -455,11 +540,18 @@
 						throw new Error(`获取沟通状态失败，业务错误码：${code}`)
 					}
 
-					const data = parseResponseData(response.Data)
+					const data = parseResponseData(response.Data, '沟通限制接口返回的数据格式不正确')
 					if (data.Code !== undefined && Number(data.Code) !== 0) {
 						throw new Error(`获取沟通状态失败，数据错误码：${data.Code}`)
 					}
-					// 兼容 SuccessStep/EnterpriseAccId 位于 Data 或响应根节点的两种返回结构。
+					// 兼容会话账号信息位于 Data 或响应根节点的两种返回结构。
+					const personAccId = data.PersonAccId !== undefined ?
+						data.PersonAccId :
+						response.PersonAccId
+					this.personAccId = personAccId === undefined || personAccId === null ?
+						'' :
+						String(personAccId).trim()
+
 					const successStep = data.SuccessStep || response.SuccessStep
 					if (successStep) {
 						this.historyExhausted = true
@@ -471,12 +563,12 @@
 						return
 					}
 
-					const enterpriseAccId = data.EnterpriseAccId !== undefined
-						? data.EnterpriseAccId
-						: response.EnterpriseAccId
-					this.enterpriseAccId = enterpriseAccId === undefined || enterpriseAccId === null
-						? ''
-						: String(enterpriseAccId).trim()
+					const enterpriseAccId = data.EnterpriseAccId !== undefined ?
+						data.EnterpriseAccId :
+						response.EnterpriseAccId
+					this.enterpriseAccId = enterpriseAccId === undefined || enterpriseAccId === null ?
+						'' :
+						String(enterpriseAccId).trim()
 					if (!this.enterpriseAccId) {
 						throw new Error('获取沟通状态失败：未返回 EnterpriseAccId')
 					}
@@ -488,6 +580,41 @@
 					console.error('[Chat] 获取聊天权限失败', error)
 				} finally {
 					if (this._chatPageAlive) this.isCheckingLimits = false
+				}
+			},
+			async loadSendResumeStatus() {
+				if (!this.jobId) return
+
+				try {
+					const response = await requestApi({
+						Name: CHECK_SEND_RESUME_API,
+						Content: {
+							JobId: this.jobId
+						}
+					})
+					if (!response || Number(response.Code) !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`获取简历投递状态失败，业务错误码：${code}`)
+					}
+
+					const data = parseResponseData(response.Data, '简历投递状态接口返回的数据格式不正确')
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error(`获取简历投递状态失败，数据错误码：${data.Code}`)
+					}
+
+					const isShow = data.IsShow !== undefined ? data.IsShow : response.IsShow
+					if (isShow === undefined || isShow === null) {
+						throw new Error('获取简历投递状态失败：未返回 IsShow')
+					}
+
+					const shouldShowSendResume = isShow === true ||
+						isShow === 1 ||
+						String(isShow).toLowerCase() === 'true'
+					if (!this._chatPageAlive) return
+					const resumeAction = this.actions.find(action => action.key === 'resume')
+					if (resumeAction) resumeAction.label = shouldShowSendResume ? '发简历' : '再次投递'
+				} catch (error) {
+					console.error('[Chat] 获取简历投递状态失败', error)
 				}
 			},
 			async prepareNimConversation() {
@@ -510,7 +637,8 @@
 				this.historyLoadError = ''
 				this._conversationInitPromise = (async () => {
 					const nim = getNimInstance()
-					this.conversationId = nim.V2NIMConversationIdUtil.p2pConversationId(this.enterpriseAccId)
+					this.conversationId = nim.V2NIMConversationIdUtil.p2pConversationId(this
+						.enterpriseAccId)
 					// 双方用户资料与历史消息并行获取，头像返回后 Vue 会自动刷新消息头像。
 					this.loadSelfUserProfile()
 					this.loadOtherUserProfile()
@@ -536,9 +664,9 @@
 
 				const nim = getNimInstance()
 				const loginService = nim.V2NIMLoginService
-				const accountId = loginService && typeof loginService.getLoginUser === 'function'
-					? loginService.getLoginUser()
-					: ''
+				const accountId = loginService && typeof loginService.getLoginUser === 'function' ?
+					loginService.getLoginUser() :
+					''
 				const userService = nim.V2NIMUserService
 				if (!accountId || !userService || typeof userService.getUserListFromCloud !== 'function') {
 					console.warn('[Chat] 无法获取云信个人资料：用户服务或登录账号不可用')
@@ -587,9 +715,9 @@
 						const otherUser = (Array.isArray(userList) ? userList : [])
 							.find(user => user && user.accountId === this.enterpriseAccId)
 						this.otherUserInfo = otherUser || null
-						const avatar = otherUser && typeof otherUser.avatar === 'string'
-							? otherUser.avatar.trim()
-							: ''
+						const avatar = otherUser && typeof otherUser.avatar === 'string' ?
+							otherUser.avatar.trim() :
+							''
 						this.otherAvatar = avatar || DEFAULT_AVATAR
 					})
 					.catch(error => {
@@ -711,6 +839,10 @@
 				})
 			},
 			handleAction(action) {
+				if (action.key === 'resume') {
+					this.openSendResumeModal()
+					return
+				}
 				if (action.key === 'pin') {
 					this.isPinned = !this.isPinned
 					uni.showToast({
@@ -727,9 +859,149 @@
 					return
 				}
 				uni.showToast({
-					title: action.key === 'resume' ? '简历发送功能待接入' : '公司主页功能待接入',
+					title: '公司主页功能待接入',
 					icon: 'none'
 				})
+			},
+			async openSendResumeModal() {
+				if (this.isLoadingSendResumeJob) return
+				if (!this.personAccId || !this.enterpriseAccId) {
+					uni.showToast({
+						title: this.isCheckingLimits ? '沟通信息加载中，请稍候' : '未获取到会话账号信息',
+						icon: 'none'
+					})
+					return
+				}
+
+				this.isLoadingSendResumeJob = true
+				uni.showLoading({
+					title: '职位信息加载中',
+					mask: true
+				})
+				let loadingVisible = true
+				try {
+					const response = await requestApi({
+						Name: GET_SEND_RESUME_JOB_API,
+						Content: {
+							FromAccId: this.personAccId,
+							ToAccId: this.enterpriseAccId
+						}
+					})
+					if (!response || Number(response.Code) !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`获取职位信息失败，业务错误码：${code}`)
+					}
+
+					const data = parseResponseData(response.Data, '职位信息接口返回的数据格式不正确')
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error(`获取职位信息失败，数据错误码：${data.Code}`)
+					}
+					if (!this._chatPageAlive) return
+
+					this.sendResumeJob = {
+						jobId: data.JobId === undefined || data.JobId === null ? '' : String(data.JobId),
+						jobName: data.JobName === undefined || data.JobName === null ? '' : String(data.JobName),
+						location: data.Location === undefined || data.Location === null ? '' : String(data
+							.Location),
+						salary: data.Salary === undefined || data.Salary === null ? '' : String(data.Salary)
+					}
+					this.activePanel = ''
+					this.inputFocused = false
+					this.showSendResumeModal = true
+				} catch (error) {
+					if (!this._chatPageAlive) return
+					uni.hideLoading()
+					loadingVisible = false
+					uni.showToast({
+						title: error && error.message ? error.message : '职位信息加载失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 获取简历投递职位信息失败', error)
+				} finally {
+					if (loadingVisible) uni.hideLoading()
+					if (this._chatPageAlive) this.isLoadingSendResumeJob = false
+				}
+			},
+			closeSendResumeModal() {
+				this.showSendResumeModal = false
+			},
+			async confirmSendResume() {
+				if (this.isSendingResume) return
+
+				const rawJobId = this.sendResumeJob && this.sendResumeJob.jobId
+				if (rawJobId === undefined || rawJobId === null || String(rawJobId).trim() === '') {
+					this.closeSendResumeModal()
+					uni.showToast({
+						title: '未获取到有效职位信息',
+						icon: 'none'
+					})
+					return
+				}
+
+				const numericJobId = Number(rawJobId)
+				const jobId = Number.isFinite(numericJobId) ? numericJobId : String(rawJobId).trim()
+				this.isSendingResume = true
+				this.closeSendResumeModal()
+				uni.showLoading({
+					title: '简历发送中',
+					mask: true
+				})
+				let loadingVisible = true
+
+				try {
+					const response = await requestApi({
+						Name: DELIVERY_RESUME_API,
+						Content: {
+							JobId: jobId
+						}
+					})
+					if (!response || Number(response.Code) !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`发送简历失败，业务错误码：${code}`)
+					}
+
+					const data = parseResponseData(response.Data, '简历投递接口返回的数据格式不正确')
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error(`发送简历失败，数据错误码：${data.Code}`)
+					}
+
+					const successStep = data.SuccessStep || response.SuccessStep || data
+					const tips = successStep && successStep.Tips !== undefined
+						? String(successStep.Tips)
+						: response.Tips !== undefined ? String(response.Tips) : ''
+					const buttonName = successStep && successStep.ButtonName !== undefined
+						? String(successStep.ButtonName)
+						: successStep && successStep.StepName !== undefined
+							? String(successStep.StepName)
+							: response.ButtonName !== undefined ? String(response.ButtonName) : '确定'
+
+					if (tips.includes('投递成功')) {
+						const resumeAction = this.actions.find(action => action.key === 'resume')
+						if (resumeAction) resumeAction.label = '再次投递'
+					}
+
+					if (!this._chatPageAlive) return
+					uni.hideLoading()
+					loadingVisible = false
+					uni.showModal({
+						title: '温馨提示',
+						content: tips,
+						showCancel: false,
+						confirmText: buttonName || '确定'
+					})
+				} catch (error) {
+					if (!this._chatPageAlive) return
+					uni.hideLoading()
+					loadingVisible = false
+					uni.showToast({
+						title: error && error.message ? error.message : '简历发送失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 发送简历失败', error)
+				} finally {
+					if (loadingVisible) uni.hideLoading()
+					if (this._chatPageAlive) this.isSendingResume = false
+				}
 			},
 			async loadEarlierMessages(initialLoad = false) {
 				if (this.isLoadingHistory || this.historyExhausted || !this.conversationId) return
@@ -797,6 +1069,27 @@
 				}
 				this.$nextTick(() => this.scrollToBottom(false))
 			},
+			enterVoiceMode() {
+				this.inputFocused = false
+				this.isVoiceMode = true
+				this.activePanel = ''
+				this.isEditingCommonPhrases = false
+				this.$nextTick(() => this.scrollToBottom(false))
+			},
+			handleKeyboardButton() {
+				if (!this.isVoiceMode) {
+					this.togglePanel('phrases')
+					return
+				}
+
+				this.isVoiceMode = false
+				this.activePanel = ''
+				this.isEditingCommonPhrases = false
+				this.$nextTick(() => {
+					this.inputFocused = true
+					this.scrollToBottom(false)
+				})
+			},
 			closePanel() {
 				if (this.activePanel) this.activePanel = ''
 				this.isEditingCommonPhrases = false
@@ -849,9 +1142,9 @@
 							Msg: message
 						}
 					})
-					const responseCode = response && response.Code !== undefined
-						? Number(response.Code)
-						: NaN
+					const responseCode = response && response.Code !== undefined ?
+						Number(response.Code) :
+						NaN
 					const data = response && response.Data ? response.Data : {}
 					const dataCode = data.Code !== undefined ? Number(data.Code) : 0
 
@@ -974,8 +1267,373 @@
 				if (!emoji || !emoji.key) return
 				this.draft += emoji.key
 			},
+			/**
+			 * 读取临时图片文件大小。chooseImage 在 App/小程序端会直接返回 size，
+			 * 对未提供 size 的运行环境再通过 getFileInfo 补查，避免绕过 25 MB 限制。
+			 */
+			getImageFileSize(filePath, fileObject) {
+				const nestedFile = fileObject && (fileObject.file || fileObject.raw)
+				const knownSize = Number(fileObject && fileObject.size) ||
+					Number(nestedFile && nestedFile.size) || 0
+				if (knownSize) return Promise.resolve(knownSize)
+
+				// #ifdef H5
+				// H5 没有 uni.getFileInfo，通过 Blob URL 读取文件大小。
+				if (filePath && typeof fetch === 'function') {
+					return fetch(filePath)
+						.then(response => response.blob())
+						.then(blob => Number(blob && blob.size) || 0)
+						.catch(() => 0)
+				}
+				// #endif
+
+				if (!filePath || typeof uni.getFileInfo !== 'function') return Promise.resolve(0)
+
+				return new Promise(resolve => {
+					uni.getFileInfo({
+						filePath,
+						success: result => resolve(Number(result && result.size) || 0),
+						fail: () => resolve(0)
+					})
+				})
+			},
+			/**
+			 * H5 使用 Canvas 压缩为 JPEG；App/小程序使用 uni.compressImage。
+			 * 不支持压缩的图片格式会回退到原图，并继续执行 25 MB 校验。
+			 */
+			compressChatImage(filePath, sourceFile) {
+				// #ifdef H5
+				return this.compressH5ChatImage(filePath, sourceFile).catch(error => {
+					console.warn('[Chat] H5 图片压缩失败，回退发送原图', error)
+					const fallbackFile = sourceFile && (sourceFile.file || sourceFile.raw) || sourceFile
+					return {
+						path: filePath,
+						uploadSource: fallbackFile || filePath,
+						name: fallbackFile && fallbackFile.name ? fallbackFile.name : getImageFileName(filePath),
+						size: Number(sourceFile && sourceFile.size) || 0
+					}
+				})
+				// #endif
+
+				// #ifndef H5
+				if (!filePath || typeof uni.compressImage !== 'function') {
+					return Promise.resolve({
+						path: filePath,
+						uploadSource: filePath,
+						size: 0
+					})
+				}
+
+				return new Promise(resolve => {
+					uni.compressImage({
+						src: filePath,
+						quality: IMAGE_COMPRESS_QUALITY,
+						success: result => {
+							const compressedPath = result && result.tempFilePath
+							resolve({
+								path: compressedPath || filePath,
+								uploadSource: compressedPath || filePath,
+								size: Number(result && result.size) || 0
+							})
+						},
+						fail: error => {
+							// GIF 等格式在部分平台不能压缩，保留原图继续走大小校验和发送。
+							console.warn('[Chat] 图片压缩失败，回退发送原图', error)
+							resolve({
+								path: filePath,
+								uploadSource: filePath,
+								size: 0
+							})
+						}
+					})
+				})
+				// #endif
+			},
+			// #ifdef H5
+			/**
+			 * H5 端使用浏览器 Canvas 压缩图片。输出 File 直接交给云信 SDK 上传，
+			 * Blob URL 仅用于读取尺寸，并在消息发送结束后由 cleanup 释放。
+			 */
+			async compressH5ChatImage(filePath, sourceFile) {
+				if (!filePath && !sourceFile) throw new Error('未获取到图片文件')
+
+				const browserFile = typeof Blob === 'undefined' ?
+					null :
+					[sourceFile, sourceFile && sourceFile.file, sourceFile && sourceFile.raw]
+					.find(item => item instanceof Blob) || null
+				const sourceType = browserFile && browserFile.type ?
+					String(browserFile.type).toLowerCase() :
+					sourceFile && sourceFile.type ? String(sourceFile.type).toLowerCase() : ''
+				const sourceName = browserFile && browserFile.name ?
+					String(browserFile.name) :
+					sourceFile && sourceFile.name ? String(sourceFile.name) : String(filePath || '')
+				const isGif = sourceType === 'image/gif' || /\.gif(?:$|\?)/i.test(sourceName)
+				if (isGif) {
+					// Canvas 只能保留 GIF 第一帧，聊天场景中应保留原始动图。
+					return {
+						path: filePath,
+						uploadSource: browserFile || sourceFile || filePath,
+						name: sourceName || getImageFileName(filePath),
+						size: Number(browserFile && browserFile.size) || Number(sourceFile && sourceFile.size) || 0
+					}
+				}
+
+				let sourceUrl = filePath
+				let shouldRevokeSourceUrl = false
+				if (browserFile) {
+					sourceUrl = URL.createObjectURL(browserFile)
+					shouldRevokeSourceUrl = true
+				}
+				if (!sourceUrl) throw new Error('未获取到图片临时地址')
+
+				try {
+					const imageElement = await new Promise((resolve, reject) => {
+						const image = new Image()
+						image.onload = () => resolve(image)
+						image.onerror = () => reject(new Error('浏览器读取图片失败'))
+						image.src = sourceUrl
+					})
+					const sourceWidth = Number(imageElement.naturalWidth || imageElement.width) || 0
+					const sourceHeight = Number(imageElement.naturalHeight || imageElement.height) || 0
+					if (!sourceWidth || !sourceHeight) throw new Error('未获取到图片尺寸')
+
+					const scale = Math.min(1, H5_IMAGE_MAX_EDGE / Math.max(sourceWidth, sourceHeight))
+					const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
+					const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
+					const canvas = document.createElement('canvas')
+					canvas.width = targetWidth
+					canvas.height = targetHeight
+					const context = canvas.getContext('2d')
+					if (!context) throw new Error('浏览器不支持图片压缩')
+
+					// JPEG 不支持透明通道，先铺白色背景，避免透明 PNG 变黑。
+					context.fillStyle = '#ffffff'
+					context.fillRect(0, 0, targetWidth, targetHeight)
+					context.drawImage(imageElement, 0, 0, targetWidth, targetHeight)
+					const compressedBlob = await new Promise((resolve, reject) => {
+						canvas.toBlob(blob => {
+							if (blob) resolve(blob)
+							else reject(new Error('浏览器生成压缩图片失败'))
+						}, 'image/jpeg', IMAGE_COMPRESS_QUALITY / 100)
+					})
+					if (browserFile && browserFile.size && compressedBlob.size >= browserFile.size) {
+						// 压缩结果反而更大时发送原文件，避免无效增容并保留原始格式。
+						return {
+							path: filePath,
+							uploadSource: browserFile,
+							name: sourceName || getImageFileName(filePath),
+							size: browserFile.size,
+							width: sourceWidth,
+							height: sourceHeight
+						}
+					}
+
+					const compressedName = getCompressedImageName(filePath, sourceFile)
+					const compressedFile = new File([compressedBlob], compressedName, {
+						type: 'image/jpeg',
+						lastModified: Date.now()
+					})
+					const compressedUrl = URL.createObjectURL(compressedFile)
+					return {
+						path: compressedUrl,
+						uploadSource: compressedFile,
+						name: compressedName,
+						size: compressedFile.size,
+						width: targetWidth,
+						height: targetHeight,
+						cleanup: () => URL.revokeObjectURL(compressedUrl)
+					}
+				} finally {
+					if (shouldRevokeSourceUrl) URL.revokeObjectURL(sourceUrl)
+				}
+			},
+			// #endif
+			/**
+			 * 处理一张已选择的图片：校验原图、压缩、复核大小并发送到云信。
+			 * 返回 oversize 供批量流程统一提示，避免连续弹出多个相同 Toast。
+			 */
+			async processSelectedImage(selectedFile, filePath, current, total) {
+				let cleanupCompressedFile = null
+				try {
+					// 先检查原始文件，超过限制时不做无意义的压缩和上传。
+					const originalSize = Number(selectedFile && selectedFile.size) ||
+						await this.getImageFileSize(filePath, selectedFile)
+					if (originalSize > MAX_IMAGE_SIZE) return 'oversize'
+
+					const compressedFile = await this.compressChatImage(filePath, selectedFile)
+					const compressedPath = compressedFile.path || filePath
+					cleanupCompressedFile = compressedFile.cleanup || null
+					const compressedSize = Number(compressedFile.size) ||
+						await this.getImageFileSize(compressedPath, compressedFile.uploadSource)
+					if (compressedSize > MAX_IMAGE_SIZE) return 'oversize'
+
+					const imageInfo = await new Promise(resolve => {
+						if (typeof uni.getImageInfo !== 'function') {
+							resolve({})
+							return
+						}
+						uni.getImageInfo({
+							src: compressedPath,
+							success: resolve,
+							fail: () => resolve({})
+						})
+					})
+
+					const isSent = await this.sendImageMessage({
+						uploadSource: compressedFile.uploadSource || compressedPath,
+						name: compressedFile.name || getImageFileName(compressedPath || filePath),
+						width: Number(compressedFile.width) || Number(imageInfo && imageInfo.width) ||
+							Number(selectedFile && selectedFile.width) || 0,
+						height: Number(compressedFile.height) || Number(imageInfo && imageInfo.height) ||
+							Number(selectedFile && selectedFile.height) || 0
+					}, current, total)
+					return isSent ? 'sent' : 'failed'
+				} finally {
+					if (typeof cleanupCompressedFile === 'function') cleanupCompressedFile()
+				}
+			},
+			/**
+			 * 相册最多选择 9 张并按顺序逐张发送；相机保持单张拍摄。
+			 * 单张异常不会中断整个批次，超过 25 MB 的图片会跳过并统一提示。
+			 */
+			async selectAndSendImage(sourceType) {
+				if (this.isSendingMessage || this.isSelectingImage) return
+				if (!this.conversationId || !isNimLoggedIn()) {
+					uni.showToast({
+						title: '聊天服务尚未就绪',
+						icon: 'none'
+					})
+					return
+				}
+
+				this.isSelectingImage = true
+				try {
+					const isCamera = sourceType === 'camera'
+					const chooseResult = await new Promise((resolve, reject) => {
+						uni.chooseImage({
+							count: isCamera ? 1 : 9,
+							sourceType: [isCamera ? 'camera' : 'album'],
+							success: resolve,
+							fail: reject
+						})
+					})
+					const tempFiles = chooseResult && Array.isArray(chooseResult.tempFiles) ?
+						chooseResult.tempFiles.slice(0, isCamera ? 1 : 9) :
+						[]
+					const tempFilePaths = chooseResult && Array.isArray(chooseResult.tempFilePaths) ?
+						chooseResult.tempFilePaths.slice(0, isCamera ? 1 : 9) :
+						[]
+					const selectedCount = Math.max(tempFiles.length, tempFilePaths.length)
+					const selectedImages = Array.from({
+						length: selectedCount
+					}, (unused, index) => {
+						const file = tempFiles[index] || null
+						return {
+							file,
+							path: file && (file.path || file.tempFilePath) || tempFilePaths[index] || ''
+						}
+					}).filter(item => item.path)
+					if (!selectedImages.length) return
+
+					let oversizeCount = 0
+					let processFailedCount = 0
+					for (let index = 0; index < selectedImages.length; index += 1) {
+						const item = selectedImages[index]
+						try {
+							const result = await this.processSelectedImage(
+								item.file,
+								item.path,
+								index + 1,
+								selectedImages.length
+							)
+							if (result === 'oversize') oversizeCount += 1
+							else if (result !== 'sent') processFailedCount += 1
+						} catch (error) {
+							processFailedCount += 1
+							console.error(`[Chat] 第 ${index + 1} 张图片处理失败`, error)
+						}
+					}
+
+					if (oversizeCount) {
+						uni.showToast({
+							title: '图片大小超过25m，无法发送',
+							icon: 'none'
+						})
+					} else if (processFailedCount) {
+						uni.showToast({
+							title: '部分图片处理失败，请重试',
+							icon: 'none'
+						})
+					}
+				} catch (error) {
+					const errorText = error && (error.errMsg || error.message) ? (error.errMsg || error.message) : ''
+					if (/cancel/i.test(errorText)) return
+					uni.showToast({
+						title: errorText || '图片选择失败，请重试',
+						icon: 'none'
+					})
+					console.error('[Chat] 选择图片失败', error)
+				} finally {
+					this.isSelectingImage = false
+				}
+			},
+			/**
+			 * 使用网易云信 V2 图片消息构造器上传并发送。SDK 会负责 NOS 上传，
+			 * 发送成功后将服务端返回的消息合并到当前列表，和文本消息保持一致。
+			 */
+			async sendImageMessage(image, current = 1, total = 1) {
+				if (!image || !image.uploadSource || this.isSendingMessage) return false
+
+				this.isSendingMessage = true
+				this.imageUploadProgress = 0
+				uni.showLoading({
+					title: total > 1 ? `发送图片 ${current}/${total}` : '图片发送中...',
+					mask: true
+				})
+				try {
+					const nim = getNimInstance()
+					const message = nim.V2NIMMessageCreator.createImageMessage(
+						image.uploadSource,
+						image.name,
+						undefined,
+						image.width || undefined,
+						image.height || undefined
+					)
+					const result = await nim.V2NIMMessageService.sendMessage(
+						message,
+						this.conversationId, {},
+						progress => {
+							const progressValue = Number(progress) || 0
+							this.imageUploadProgress = Math.max(0, Math.min(100, Math.round(
+								progressValue <= 1 ? progressValue * 100 : progressValue
+							)))
+						}
+					)
+					if (!result || !result.message) throw new Error('图片发送失败：SDK 未返回消息')
+
+					uni.hideLoading()
+					this.mergeMessages([result.message])
+					this.activePanel = ''
+					this.$nextTick(() => this.scrollToBottom(true))
+					return true
+				} catch (error) {
+					uni.hideLoading()
+					// 批量发送时由外层统一提示，避免一张失败弹出两次 Toast。
+					if (total <= 1) {
+						uni.showToast({
+							title: error && error.message ? error.message : '图片发送失败',
+							icon: 'none'
+						})
+					}
+					console.error('[Chat] 发送云信图片消息失败', error)
+					return false
+				} finally {
+					this.isSendingMessage = false
+					this.imageUploadProgress = 0
+				}
+			},
 			async sendMessage() {
-				if (this.isSendingMessage) return
+				if (this.isSendingMessage || this.isSelectingImage) return
 
 				const content = this.draft.trim()
 				if (!content) {
@@ -1016,13 +1674,31 @@
 			},
 			previewImage(url) {
 				if (!url) return
+				// 预览当前会话内的全部图片，并保持聊天消息顺序，支持左右滑动切换。
+				const urls = this.messages.reduce((result, message) => {
+					const attachment = message && message.attachment ? message.attachment : {}
+					if (Number(message && message.messageType) === 1 && attachment.url) {
+						result.push(attachment.url)
+					}
+					return result
+				}, [])
+				// 当前图片尚未写入消息列表时仍保证可以正常预览。
+				if (!urls.includes(url)) urls.push(url)
 				uni.previewImage({
 					current: url,
-					urls: [url]
+					urls
 				})
 			},
 			handleMoreAction(item) {
 				this.activePanel = ''
+				if (item && item.key === 'photo') {
+					this.selectAndSendImage('album')
+					return
+				}
+				if (item && item.key === 'camera') {
+					this.selectAndSendImage('camera')
+					return
+				}
 				uni.showToast({
 					title: `${item.label}功能待接入`,
 					icon: 'none'
@@ -1326,6 +2002,7 @@
 
 		.message-input {
 			flex: 1;
+			min-width: 0;
 			box-sizing: border-box;
 			height: 68rpx;
 			margin-left: 28rpx;
@@ -1341,6 +2018,26 @@
 			width: 60rpx;
 			height: 60rpx;
 			margin-left: 20rpx;
+		}
+
+		.voice-button {
+			flex: 1;
+			box-sizing: border-box;
+			min-width: 0;
+			height: 68rpx;
+			margin: 0 0 0 28rpx;
+			padding: 0 20rpx;
+			font-size: 28rpx;
+			font-weight: 500;
+			line-height: 68rpx;
+			color: #333333;
+			background: #f3f6f8;
+			border: 1rpx solid #e5e8eb;
+			border-radius: 8rpx;
+
+			&::after {
+				border: none;
+			}
 		}
 	}
 
@@ -1557,12 +2254,126 @@
 			font-size: 30rpx;
 			color: #2399ed;
 
-			& + .quick-reply-button {
+			&+.quick-reply-button {
 				border-left: 1rpx solid #eeeeee;
 			}
 
 			&.quick-reply-button--disabled {
 				opacity: 0.55;
+			}
+		}
+	}
+
+	.send-resume-mask {
+		position: fixed;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 110;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 40rpx;
+		background: rgba(0, 0, 0, 0.55);
+	}
+
+	.send-resume-dialog {
+		overflow: hidden;
+		width: 560rpx;
+		background: #ffffff;
+		border-radius: 8rpx;
+		box-shadow: 0 10rpx 40rpx rgba(0, 0, 0, 0.18);
+	}
+
+	.send-resume-content {
+		padding: 42rpx 40rpx 30rpx;
+		text-align: center;
+
+		.send-resume-title,
+		.send-resume-tip {
+			display: block;
+		}
+
+		.send-resume-title {
+			font-size: 32rpx;
+			font-weight: 600;
+			line-height: 44rpx;
+			color: #333333;
+		}
+
+		.send-resume-tip {
+			margin-top: 16rpx;
+			font-size: 25rpx;
+			line-height: 36rpx;
+			color: #999999;
+		}
+	}
+
+	.send-resume-job {
+		display: flex;
+		align-items: center;
+		box-sizing: border-box;
+		height: 58rpx;
+		margin-top: 28rpx;
+		padding: 0 12rpx;
+		overflow: hidden;
+		background: #f5f7f8;
+	}
+
+	.send-resume-job-item {
+		display: flex;
+		flex: 1;
+		align-items: center;
+		min-width: 0;
+
+		&.send-resume-job-item--name {
+			flex: 1.35;
+		}
+
+		&+.send-resume-job-item {
+			margin-left: 12rpx;
+		}
+
+		.send-resume-job-icon {
+			flex-shrink: 0;
+			margin-right: 8rpx;
+		}
+
+		.send-resume-job-text {
+			display: block;
+			min-width: 0;
+			overflow: hidden;
+			text-align: left;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			font-size: 22rpx;
+			color: #999999;
+		}
+	}
+
+	.send-resume-actions {
+		display: flex;
+		height: 88rpx;
+		border-top: 1rpx solid #eeeeee;
+
+		.send-resume-button {
+			display: flex;
+			flex: 1;
+			align-items: center;
+			justify-content: center;
+			font-size: 30rpx;
+
+			&+.send-resume-button {
+				border-left: 1rpx solid #eeeeee;
+			}
+
+			&.send-resume-button--cancel {
+				color: #999999;
+			}
+
+			&.send-resume-button--confirm {
+				color: #2399ed;
 			}
 		}
 	}
