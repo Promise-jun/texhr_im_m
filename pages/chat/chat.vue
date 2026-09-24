@@ -14,7 +14,7 @@
 						<image :src="action.iconUrl" mode="aspectFit" :style="action.style"></image>
 						<text v-if="action.key === 'pin' && isPinned" class="action-dot"></text>
 					</view>
-					<text class="action-label">{{ action.key === 'pin' && isPinned ? '已置顶' : action.label }}</text>
+					<text class="action-label">{{ action.key === 'pin' && isPinned ? '取消置顶' : action.label }}</text>
 				</view>
 			</view>
 		</view>
@@ -50,9 +50,15 @@
 						:class="message.direction">
 						<image :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
 							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
-						<view class="message-bubble" :class="{ 'message-bubble--image': message.type === 'image' }">
+						<view class="message-bubble"
+							:class="{ 'message-bubble--image': message.type === 'image', 'message-bubble--audio': message.type === 'audio' }"
+							@click.stop="message.type === 'audio' && playAudioMessage(message)">
 							<image v-if="message.type === 'image'" :src="message.url" class="message-image"
 								mode="widthFix" @click.stop="previewImage(message.url)"></image>
+							<view v-else-if="message.type === 'audio'" class="audio-message-content">
+								<text class="audio-message-icon">{{ audioPlayingId === message.id ? '❚❚' : '▶' }}</text>
+								<text class="audio-message-duration">{{ message.durationSeconds }}"</text>
+							</view>
 							<view v-else class="message-text">
 								<block v-for="(segment, segmentIndex) in message.segments" :key="segmentIndex">
 									<image v-if="segment.type === 'emoji'" :src="segment.url" :aria-label="segment.key"
@@ -78,7 +84,9 @@
 					@confirm="sendMessage" />
 				<image v-if="!isVoiceMode" src="../../static/icon_audio_btn.png" class="round-button" mode="aspectFit"
 					@click="enterVoiceMode"></image>
-				<button v-else class="voice-button">按住 说话</button>
+				<button v-else class="voice-button" @touchstart.stop.prevent="startVoiceRecording"
+					@touchmove.stop.prevent="updateVoiceRecordingGesture" @touchend.stop.prevent="finishVoiceRecording"
+					@touchcancel.stop.prevent="cancelVoiceRecording">按住 说话</button>
 				<image src="../../static/icon_emoji.png" class="round-button" @click="togglePanel('emoji')"></image>
 				<button v-if="!isVoiceMode && draft" class="send-button" :disabled="isSendingMessage"
 					@click="sendMessage">
@@ -131,6 +139,44 @@
 						<image :src="item.iconUrl" class="more-icon" mode="aspectFill"></image>
 						<text>{{ item.label }}</text>
 					</view>
+				</view>
+			</view>
+		</view>
+
+		<!-- 录音时遮罩整个聊天页，手指移动到左右区域即可切换取消/转文字意图。 -->
+		<view v-if="isRecording" class="voice-record-mask" @touchmove.stop.prevent="updateVoiceRecordingGesture"
+			@touchend.stop.prevent="finishVoiceRecording" @touchcancel.stop.prevent="cancelVoiceRecording">
+			<view class="voice-record-card">
+				<view class="voice-wave" :class="{ 'voice-wave--warning': recordingCountdown > 0 }">
+					<text v-for="bar in voiceWaveBars" :key="bar" class="voice-wave-bar"
+						:style="{ animationDelay: `${(bar % 7) * -0.09}s` }"></text>
+				</view>
+				<text class="voice-record-status">{{ recordingStatusText }}</text>
+				<text v-if="recordingCountdown > 0" class="voice-record-countdown">还剩 {{ recordingCountdown }} 秒</text>
+			</view>
+			<view class="voice-record-actions">
+				<view class="voice-record-action" :class="{ 'voice-record-action--active': recordingGesture === 'cancel' }">
+					<text>取消</text>
+				</view>
+				<view class="voice-record-action" :class="{ 'voice-record-action--active': recordingGesture === 'transcribe' }">
+					<text>滑到这里 转文字</text>
+				</view>
+			</view>
+		</view>
+
+		<!-- 转文字结果只保留可编辑文本和两个发送动作，不叠加翻译/表情入口。 -->
+		<view v-if="showVoiceTextEditor" class="voice-text-mask" @click.stop>
+			<view class="voice-text-close" @click="discardPendingVoice">×</view>
+			<view class="voice-text-editor-wrap">
+				<textarea v-model="transcribedText" class="voice-text-editor" maxlength="500"
+					placeholder="语音转文字结果" />
+			</view>
+			<view class="voice-text-footer">
+				<view class="voice-text-action voice-text-action--audio" @click="sendPendingVoice">
+					<text>发送原语音</text>
+				</view>
+				<view class="voice-text-action voice-text-action--text" @click="sendTranscribedText">
+					<text>发送</text>
 				</view>
 			</view>
 		</view>
@@ -195,9 +241,11 @@
 	} from '../../services/request'
 	import {
 		NIM_EVENT,
+		clearActiveConversationId,
 		getNimLoginError,
 		getNimInstance,
-		isNimLoggedIn
+		isNimLoggedIn,
+		setActiveConversationId
 	} from '../../services/nim'
 	import {
 		markNimConversationRead
@@ -208,6 +256,7 @@
 	} from '../../services/nim-emoji'
 
 	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
+	const CHAT_SAVE_API = 'Chat.Chat.Save'
 	const CHECK_SEND_RESUME_API = 'Chat.Person.CheckSendResume'
 	const GET_SEND_RESUME_JOB_API = 'Chat.Chat.GetJob'
 	// 接口文档中的方法名为 Chat.Peson.Delivery（Peson 为文档原始拼写）。
@@ -223,6 +272,10 @@
 	const IMAGE_COMPRESS_QUALITY = 80
 	// H5 Canvas 压缩时限制长边，避免超大分辨率图片占用过多内存和流量。
 	const H5_IMAGE_MAX_EDGE = 1920
+	// 语音最多录制 60 秒，最后 10 秒在录音卡片上显示倒计时。
+	const MAX_VOICE_DURATION = 60 * 1000
+	const VOICE_COUNTDOWN_DURATION = 10 * 1000
+	const MIN_VOICE_DURATION = 1000
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const MAN_AVATAR = '/static/man_avatar.png'
 	const WOMAN_AVATAR = '/static/woman_avatar.png'
@@ -309,6 +362,32 @@
 		return `${originalName.replace(/\.[^.]+$/, '') || `image_${Date.now()}`}.jpg`
 	}
 
+	function getVoiceFileInfo(filePath) {
+		const cleanPath = String(filePath || '').split('?')[0]
+		const pathParts = cleanPath.split(/[\\/]/)
+		let name = pathParts[pathParts.length - 1] || `voice_${Date.now()}.mp3`
+		try {
+			name = decodeURIComponent(name)
+		} catch (error) {
+			// 临时文件路径未编码时直接使用原始名称。
+		}
+		if (!/\.[a-z0-9]+$/i.test(name)) name += '.mp3'
+		const extension = (name.match(/\.([a-z0-9]+)$/i) || [])[1] || 'mp3'
+		const mimeTypes = {
+			mp3: 'audio/mpeg',
+			m4a: 'audio/mp4',
+			aac: 'audio/aac',
+			wav: 'audio/wav',
+			amr: 'audio/amr',
+			ogg: 'audio/ogg',
+			webm: 'audio/webm'
+		}
+		return {
+			name,
+			mimeType: mimeTypes[extension.toLowerCase()] || ''
+		}
+	}
+
 	function normalizeNimMessage(message) {
 		const messageType = Number(message && message.messageType)
 		const attachment = message && message.attachment ? message.attachment : {}
@@ -334,6 +413,17 @@
 				type: 'image',
 				url: attachment.url,
 				content: '[图片]'
+			}
+		}
+		if (messageType === 2 && attachment.url) {
+			const duration = Math.max(0, Number(attachment.duration) || 0)
+			return {
+				...base,
+				type: 'audio',
+				url: attachment.url,
+				duration,
+				durationSeconds: Math.max(1, Math.ceil(duration / 1000)),
+				content: '[语音]'
 			}
 		}
 		if (messageType === 10) {
@@ -398,9 +488,19 @@
 					}
 				],
 				isPinned: false,
+				isUpdatingPin: false,
 				draft: '',
 				inputFocused: false,
 				isVoiceMode: false,
+				isRecording: false,
+				recordingGesture: 'send',
+				recordingElapsed: 0,
+				voiceWaveBars: 23,
+				pendingVoice: null,
+				showVoiceTextEditor: false,
+				transcribedText: '',
+				isTranscribingVoice: false,
+				audioPlayingId: '',
 				statusBarHeight: 0,
 				activePanel: '',
 				scrollIntoView: '',
@@ -476,6 +576,16 @@
 			},
 			scrollTopStyle() {
 				return `calc(${this.statusBarHeight}px + 220rpx)`
+			},
+			recordingCountdown() {
+				const remaining = MAX_VOICE_DURATION - this.recordingElapsed
+				if (remaining > VOICE_COUNTDOWN_DURATION) return 0
+				return Math.max(0, Math.ceil(remaining / 1000))
+			},
+			recordingStatusText() {
+				if (this.recordingGesture === 'cancel') return '松开 取消'
+				if (this.recordingGesture === 'transcribe') return '松开 转文字'
+				return '松开 发送语音'
 			}
 		},
 		async onLoad(options = {}) {
@@ -492,8 +602,17 @@
 		},
 		onUnload() {
 			this._chatPageAlive = false
+			// 离开聊天页后恢复消息列表页的其它会话红点判断。
+			clearActiveConversationId(this.conversationId)
+			this.abortVoiceRecording()
+			this.destroyAudioPlayer()
 			this.unbindNimLoginEvents()
 			this.unbindMessageEvents()
+		},
+		onHide() {
+			// App 进入后台时不能继续占用麦克风或播放语音。
+			if (this.isRecording) this.abortVoiceRecording()
+			this.destroyAudioPlayer()
 		},
 		methods: {
 			bindNimLoginEvents() {
@@ -544,6 +663,8 @@
 					if (data.Code !== undefined && Number(data.Code) !== 0) {
 						throw new Error(`获取沟通状态失败，数据错误码：${data.Code}`)
 					}
+					const isTop = data.IsTop !== undefined ? data.IsTop : response.IsTop
+					this.isPinned = isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true'
 					// 兼容会话账号信息位于 Data 或响应根节点的两种返回结构。
 					const personAccId = data.PersonAccId !== undefined ?
 						data.PersonAccId :
@@ -639,6 +760,8 @@
 					const nim = getNimInstance()
 					this.conversationId = nim.V2NIMConversationIdUtil.p2pConversationId(this
 						.enterpriseAccId)
+					// 标记当前前台会话：列表页收到消息事件时不为该会话重复显示红点。
+					setActiveConversationId(this.conversationId)
 					// 双方用户资料与历史消息并行获取，头像返回后 Vue 会自动刷新消息头像。
 					this.loadSelfUserProfile()
 					this.loadOtherUserProfile()
@@ -744,17 +867,13 @@
 			},
 			bindMessageEvents() {
 				if (this._messageEventsBound) return
-
-				const messageService = getNimInstance().V2NIMMessageService
-				if (!messageService) throw new Error('当前网易云信 SDK 不支持消息服务')
-				messageService.on('onReceiveMessages', this.handleReceiveMessages)
-				this._messageService = messageService
+				// 消息监听已在 services/nim.js 单例层注册，这里只订阅页面级事件。
+				uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
 				this._messageEventsBound = true
 			},
 			unbindMessageEvents() {
-				if (!this._messageEventsBound || !this._messageService) return
-				this._messageService.off('onReceiveMessages', this.handleReceiveMessages)
-				this._messageService = null
+				if (!this._messageEventsBound) return
+				uni.$off(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
 				this._messageEventsBound = false
 			},
 			handleReceiveMessages(messageList) {
@@ -844,11 +963,7 @@
 					return
 				}
 				if (action.key === 'pin') {
-					this.isPinned = !this.isPinned
-					uni.showToast({
-						title: this.isPinned ? '会话已置顶' : '已取消置顶',
-						icon: 'none'
-					})
+					this.updatePinStatus()
 					return
 				}
 				if (action.key === 'more') {
@@ -862,6 +977,81 @@
 					title: '公司主页功能待接入',
 					icon: 'none'
 				})
+			},
+			async updatePinStatus() {
+				if (this.isUpdatingPin) return
+				if (!this.enterpriseAccId || !this.personAccId) {
+					uni.showToast({
+						title: this.isCheckingLimits ? '沟通信息加载中，请稍候' : '未获取到会话账号信息',
+						icon: 'none'
+					})
+					return
+				}
+				if (!this.conversationId || !isNimLoggedIn()) {
+					uni.showToast({
+						title: '聊天服务尚未就绪',
+						icon: 'none'
+					})
+					return
+				}
+
+				const nextIsPinned = !this.isPinned
+				let businessUpdated = false
+				let toastTitle = ''
+				this.isUpdatingPin = true
+				uni.showLoading({
+					title: nextIsPinned ? '置顶中' : '取消中',
+					mask: true
+				})
+
+				try {
+					const response = await requestApi({
+						Name: CHAT_SAVE_API,
+						Content: {
+							EnterpriseAccId: this.enterpriseAccId,
+							PersonAccId: this.personAccId,
+							IsTop: nextIsPinned
+						}
+					})
+					const responseCode = response && response.Code !== undefined ? Number(response.Code) : NaN
+					if (!response || responseCode !== 0) {
+						if (responseCode === 4400002) throw new Error('置顶数量已达上限')
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`更新置顶状态失败，业务错误码：${code}`)
+					}
+
+					const data = parseResponseData(response.Data, '保存会话接口返回的数据格式不正确')
+					const dataCode = data.Code !== undefined ? Number(data.Code) : 0
+					if (dataCode !== 0) {
+						if (dataCode === 4400002) throw new Error('置顶数量已达上限')
+						throw new Error(`更新置顶状态失败，数据错误码：${data.Code}`)
+					}
+
+					// 业务接口保存成功后，以服务端状态刷新当前页面，再同步网易云本地会话列表。
+					businessUpdated = true
+					this.isPinned = nextIsPinned
+					const conversationService = getNimInstance().V2NIMLocalConversationService
+					if (!conversationService || typeof conversationService.stickTopConversation !== 'function') {
+						throw new Error('当前网易云信 SDK 不支持会话置顶')
+					}
+					await conversationService.stickTopConversation(this.conversationId, nextIsPinned)
+					toastTitle = nextIsPinned ? '会话已置顶' : '已取消置顶'
+				} catch (error) {
+					toastTitle = businessUpdated ?
+						'状态已保存，会话列表同步失败' :
+						error && error.message ? error.message : '更新置顶状态失败'
+					console.error('[Chat] 更新会话置顶状态失败', error)
+				} finally {
+					uni.hideLoading()
+					if (this._chatPageAlive) this.isUpdatingPin = false
+				}
+
+				if (this._chatPageAlive && toastTitle) {
+					uni.showToast({
+						title: toastTitle,
+						icon: 'none'
+					})
+				}
 			},
 			async openSendResumeModal() {
 				if (this.isLoadingSendResumeJob) return
@@ -968,12 +1158,12 @@
 					const successStep = data.SuccessStep || response.SuccessStep || data
 					const tips = successStep && successStep.Tips !== undefined
 						? String(successStep.Tips)
-						: response.Tips !== undefined ? String(response.Tips) : ''
+						: response.Tips !== undefined ? String(response.Tips) : '投递成功，请静候佳音'
 					const buttonName = successStep && successStep.ButtonName !== undefined
 						? String(successStep.ButtonName)
 						: successStep && successStep.StepName !== undefined
 							? String(successStep.StepName)
-							: response.ButtonName !== undefined ? String(response.ButtonName) : '确定'
+							: response.ButtonName !== undefined ? String(response.ButtonName) : '知道了'
 
 					if (tips.includes('投递成功')) {
 						const resumeAction = this.actions.find(action => action.key === 'resume')
@@ -987,7 +1177,7 @@
 						title: '温馨提示',
 						content: tips,
 						showCancel: false,
-						confirmText: buttonName || '确定'
+						confirmText: buttonName || '知道了'
 					})
 				} catch (error) {
 					if (!this._chatPageAlive) return
@@ -1089,6 +1279,443 @@
 					this.inputFocused = true
 					this.scrollToBottom(false)
 				})
+			},
+			/**
+			 * 按下“按住 说话”后立即显示录音层，再按当前运行环境选择录音实现：
+			 * App/小程序使用 RecorderManager，H5 使用浏览器 MediaRecorder。
+			 */
+			async startVoiceRecording() {
+				if (this.isRecording || this._voiceFinishing || this.isSendingMessage || this.isTranscribingVoice) return
+				if (!this.conversationId || !isNimLoggedIn()) {
+					uni.showToast({
+						title: '聊天服务尚未就绪',
+						icon: 'none'
+					})
+					return
+				}
+
+				this._voiceTouchActive = true
+				this._voiceFinishing = false
+				this._voiceStoppedResult = null
+				this.recordingGesture = 'send'
+				this.recordingElapsed = 0
+				this.isRecording = true
+				this.activePanel = ''
+				this.inputFocused = false
+
+				try {
+					await this.beginVoiceCapture()
+					// 用户可能在授权弹窗尚未结束时已经松手，此时只释放录音，不发送。
+					if (!this._voiceTouchActive) {
+						await this.stopVoiceCapture()
+						this.resetRecordingState()
+						return
+					}
+
+					this._voiceRecordingStartedAt = Date.now()
+					this.clearVoiceTimer()
+					this._voiceTimer = setInterval(() => {
+						this.recordingElapsed = Math.min(
+							MAX_VOICE_DURATION,
+							Date.now() - this._voiceRecordingStartedAt
+						)
+						if (this.recordingElapsed >= MAX_VOICE_DURATION) {
+							this.finishVoiceRecording(null, true)
+						}
+					}, 100)
+				} catch (error) {
+					this.resetRecordingState()
+					const errorMessage = error && error.message ? error.message : '无法使用麦克风，请检查录音权限'
+					// 浏览器安全限制属于环境配置问题，用弹窗完整展示，避免 Toast 截断关键信息。
+					if (/HTTPS/i.test(errorMessage)) {
+						uni.showModal({ title: '无法录音', content: errorMessage, showCancel: false })
+					} else {
+						uni.showToast({ title: errorMessage, icon: 'none' })
+					}
+					console.warn('[Chat] 无法开始录音', error)
+				}
+			},
+			beginVoiceCapture() {
+				let isH5 = false
+				// #ifdef H5
+				isH5 = true
+				// #endif
+				const systemInfo = typeof uni.getSystemInfoSync === 'function' ? uni.getSystemInfoSync() : {}
+				const uniPlatform = String(systemInfo.uniPlatform || '').toLowerCase()
+				// H5 中 uni.getRecorderManager 可能只是兼容占位方法，iOS Safari 调用会抛出底层 TypeError。
+				if (isH5 || uniPlatform === 'web' || uniPlatform === 'h5') return this.beginH5VoiceCapture()
+				if (typeof uni.getRecorderManager === 'function') return this.beginNativeVoiceCapture()
+				throw new Error('当前设备不支持录音')
+			},
+			beginNativeVoiceCapture() {
+				if (!this._recorderManager) {
+					this._recorderManager = uni.getRecorderManager()
+					this._recorderManager.onStart(() => {
+						if (this._voiceStartResolve) this._voiceStartResolve()
+						this._voiceStartResolve = null
+						this._voiceStartReject = null
+					})
+					this._recorderManager.onStop(result => {
+						this._voiceStoppedResult = result || {}
+						if (this._voiceStopResolve) this._voiceStopResolve(this._voiceStoppedResult)
+						this._voiceStopResolve = null
+						// RecorderManager 达到 duration 后会自行停止，主动收口为一次正常发送。
+						if (this.isRecording && this._voiceTouchActive && !this._voiceFinishing) {
+							setTimeout(() => this.finishVoiceRecording(null, true, this._voiceStoppedResult), 0)
+						}
+					})
+					this._recorderManager.onError(error => {
+						const recordError = new Error(error && error.errMsg ? error.errMsg : '录音失败')
+						if (this._voiceStartReject) this._voiceStartReject(recordError)
+						// stop promise 以普通结果结束，避免授权失败时产生无人接收的 Promise rejection。
+						if (this._voiceStopResolve) this._voiceStopResolve({ error: recordError })
+						this._voiceStartResolve = null
+						this._voiceStartReject = null
+						this._voiceStopResolve = null
+					})
+				}
+
+				this._voiceStopPromise = new Promise(resolve => {
+					this._voiceStopResolve = resolve
+				})
+				return new Promise((resolve, reject) => {
+					this._voiceStartTimeout = setTimeout(() => {
+						this._voiceStartTimeout = null
+						this._voiceStartResolve = null
+						this._voiceStartReject = null
+						reject(new Error('启动录音超时，请重试'))
+					}, 5000)
+					this._voiceStartResolve = () => {
+						if (this._voiceStartTimeout) clearTimeout(this._voiceStartTimeout)
+						this._voiceStartTimeout = null
+						resolve()
+					}
+					this._voiceStartReject = error => {
+						if (this._voiceStartTimeout) clearTimeout(this._voiceStartTimeout)
+						this._voiceStartTimeout = null
+						reject(error)
+					}
+					this._voiceRecorderType = 'native'
+					this._recorderManager.start({
+						duration: MAX_VOICE_DURATION,
+						sampleRate: 16000,
+						numberOfChannels: 1,
+						encodeBitRate: 48000,
+						format: 'mp3'
+					})
+				})
+			},
+			async beginH5VoiceCapture() {
+				if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+					throw new Error('当前浏览器不支持录音')
+				}
+				const hostname = window.location && window.location.hostname ? window.location.hostname : ''
+				const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
+				if (window.isSecureContext === false && !isLocalhost) {
+					throw new Error('浏览器录音需要 HTTPS，请使用 HTTPS 地址访问')
+				}
+				if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+					throw new Error('浏览器无法调用麦克风，请确认使用 HTTPS 地址')
+				}
+				if (typeof MediaRecorder === 'undefined') throw new Error('当前浏览器版本不支持录音')
+
+				let stream
+				try {
+					stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+				} catch (error) {
+					const errorName = String(error && error.name || '')
+					if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
+						throw new Error('麦克风权限未开启，请在浏览器设置中允许访问')
+					}
+					if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError') {
+						throw new Error('未检测到可用的麦克风')
+					}
+					throw new Error(error && error.message ? error.message : '浏览器调用麦克风失败')
+				}
+				const mimeCandidates = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']
+				const mimeType = mimeCandidates.find(type => !MediaRecorder.isTypeSupported || MediaRecorder.isTypeSupported(type)) || ''
+				const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+				const chunks = []
+				this._voiceRecorderType = 'h5'
+				this._mediaStream = stream
+				this._mediaRecorder = recorder
+				this._mediaChunks = chunks
+				this._voiceStopPromise = new Promise(resolve => {
+					recorder.ondataavailable = event => {
+						if (event.data && event.data.size) chunks.push(event.data)
+					}
+					recorder.onerror = event => resolve({
+						error: new Error(event && event.error && event.error.message ? event.error.message : '浏览器录音失败')
+					})
+					recorder.onstop = () => {
+						const finalType = recorder.mimeType || mimeType || 'audio/webm'
+						const extension = finalType.includes('mp4') ? 'm4a' : 'webm'
+						const blob = new Blob(chunks, { type: finalType })
+						const file = new File([blob], `voice_${Date.now()}.${extension}`, { type: finalType })
+						resolve({ file, mimeType: finalType, name: file.name })
+					}
+				})
+				recorder.start(200)
+			},
+			/** 根据触点所在区域实时切换“发送 / 取消 / 转文字”意图。 */
+			updateVoiceRecordingGesture(event) {
+				if (!this.isRecording || this._voiceFinishing) return
+				const touchList = event && event.touches && event.touches.length ? event.touches :
+					event && event.changedTouches ? event.changedTouches : []
+				const touch = touchList[0]
+				if (!touch) return
+
+				const systemInfo = uni.getSystemInfoSync()
+				const width = Number(systemInfo.windowWidth) || 375
+				const height = Number(systemInfo.windowHeight) || 667
+				const x = Number(touch.clientX !== undefined ? touch.clientX : touch.pageX)
+				const y = Number(touch.clientY !== undefined ? touch.clientY : touch.pageY)
+				// 底部保留发送热区；向上滑入操作区后，左侧取消、右侧转文字。
+				if (y <= height - 88) this.recordingGesture = x < width / 2 ? 'cancel' : 'transcribe'
+				else this.recordingGesture = 'send'
+			},
+			async finishVoiceRecording(event, reachedLimit = false, stoppedResult = null) {
+				if (!this.isRecording || this._voiceFinishing) return
+				if (event) this.updateVoiceRecordingGesture(event)
+				this._voiceTouchActive = false
+				// 麦克风授权尚未完成时松手：等 startVoiceRecording 获得结果后立即停录并丢弃。
+				if (!this._voiceRecordingStartedAt) {
+					this.isRecording = false
+					this.clearVoiceTimer()
+					return
+				}
+				this._voiceFinishing = true
+				this.clearVoiceTimer()
+				const intent = this.recordingGesture
+
+				try {
+					const result = stoppedResult || await this.stopVoiceCapture()
+					const measuredDuration = this._voiceRecordingStartedAt ? Date.now() - this._voiceRecordingStartedAt : 0
+					const duration = Math.min(
+						MAX_VOICE_DURATION,
+						Math.max(0, Number(result && result.duration) || this.recordingElapsed || measuredDuration)
+					)
+					this.resetRecordingState()
+
+					if (intent === 'cancel') return
+					if (duration < MIN_VOICE_DURATION) {
+						uni.showToast({ title: '说话时间太短', icon: 'none' })
+						return
+					}
+
+					this.pendingVoice = this.normalizeRecordedVoice(result, duration)
+					if (!this.pendingVoice) throw new Error('未获取到录音文件')
+					if (intent === 'transcribe') await this.transcribePendingVoice()
+					else {
+						const sent = await this.sendPendingVoice()
+						if (!sent) this.discardPendingVoice()
+					}
+				} catch (error) {
+					this.resetRecordingState()
+					uni.showToast({
+						title: error && error.message ? error.message : reachedLimit ? '录音已到60秒，发送失败' : '录音处理失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 结束录音失败', error)
+				} finally {
+					this._voiceFinishing = false
+				}
+			},
+			async cancelVoiceRecording() {
+				if (!this.isRecording || this._voiceFinishing) return
+				this.recordingGesture = 'cancel'
+				await this.finishVoiceRecording()
+			},
+			stopVoiceCapture() {
+				if (this._voiceStoppedResult) return Promise.resolve(this._voiceStoppedResult)
+				if (this._voiceRecorderType === 'native' && this._recorderManager) {
+					this._recorderManager.stop()
+					return this.waitForVoiceStop()
+				}
+				if (this._voiceRecorderType === 'h5' && this._mediaRecorder) {
+					if (this._mediaRecorder.state !== 'inactive') this._mediaRecorder.stop()
+					this.stopMediaStream()
+					return this.waitForVoiceStop()
+				}
+				return Promise.resolve({})
+			},
+			waitForVoiceStop() {
+				if (!this._voiceStopPromise) return Promise.resolve({})
+				return Promise.race([
+					this._voiceStopPromise,
+					new Promise((resolve, reject) => setTimeout(() => reject(new Error('结束录音超时，请重试')), 5000))
+				])
+			},
+			normalizeRecordedVoice(result, duration) {
+				if (!result) return null
+				const path = result.tempFilePath || result.path || ''
+				const file = result.file || null
+				const source = file || path
+				if (!source) return null
+				const fileInfo = getVoiceFileInfo(path)
+				return {
+					source,
+					path,
+					file,
+					duration,
+					mimeType: result.mimeType || file && file.type || fileInfo.mimeType,
+					name: result.name || file && file.name || fileInfo.name
+				}
+			},
+			/** 云信 voiceToText 可直接接收本地 File 或 uni-app 临时文件路径。 */
+			async transcribePendingVoice() {
+				const voice = this.pendingVoice
+				if (!voice || this.isTranscribingVoice) return
+				this.isTranscribingVoice = true
+				uni.showLoading({ title: '正在转文字...', mask: true })
+				try {
+					const nim = getNimInstance()
+					if (!nim.V2NIMMessageService || typeof nim.V2NIMMessageService.voiceToText !== 'function') {
+						throw new Error('当前云信 SDK 不支持语音转文字')
+					}
+					const params = {
+						duration: voice.duration
+					}
+					if (voice.file) params.file = voice.file
+					else params.voicePath = voice.path
+					if (voice.mimeType) params.mimeType = voice.mimeType
+					const text = await nim.V2NIMMessageService.voiceToText(params)
+					if (!String(text || '').trim()) throw new Error('未识别到有效文字')
+
+					// 默认只展示识别结果，用户点击文本区域时再唤起键盘编辑。
+					this.transcribedText = String(text).trim()
+					this.showVoiceTextEditor = true
+				} catch (error) {
+					this.discardPendingVoice()
+					uni.showToast({
+						title: error && error.message ? error.message : '语音转文字失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 云信语音转文字失败', error)
+				} finally {
+					uni.hideLoading()
+					this.isTranscribingVoice = false
+				}
+			},
+			/** 发送录音原文件；转文字页点击“发送原语音”也复用此方法。 */
+			async sendPendingVoice() {
+				const voice = this.pendingVoice
+				if (!voice || this.isSendingMessage) return false
+				this.isSendingMessage = true
+				uni.showLoading({ title: '语音发送中...', mask: true })
+				try {
+					const nim = getNimInstance()
+					const message = nim.V2NIMMessageCreator.createAudioMessage(
+						voice.source,
+						voice.name,
+						undefined,
+						voice.duration
+					)
+					const result = await nim.V2NIMMessageService.sendMessage(message, this.conversationId)
+					if (!result || !result.message) throw new Error('语音发送失败：SDK 未返回消息')
+
+					this.mergeMessages([result.message])
+					this.discardPendingVoice()
+					this.$nextTick(() => this.scrollToBottom(true))
+					return true
+				} catch (error) {
+					uni.showToast({
+						title: error && error.message ? error.message : '语音发送失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 发送云信语音消息失败', error)
+					return false
+				} finally {
+					uni.hideLoading()
+					this.isSendingMessage = false
+				}
+			},
+			async sendTranscribedText() {
+				const content = this.transcribedText.trim()
+				if (!content) {
+					uni.showToast({ title: '请输入消息', icon: 'none' })
+					return
+				}
+				const sent = await this.sendTextContent(content)
+				if (sent) this.discardPendingVoice()
+			},
+			discardPendingVoice() {
+				this.pendingVoice = null
+				this.showVoiceTextEditor = false
+				this.transcribedText = ''
+			},
+			clearVoiceTimer() {
+				if (this._voiceTimer) clearInterval(this._voiceTimer)
+				this._voiceTimer = null
+			},
+			stopMediaStream() {
+				if (this._mediaStream && typeof this._mediaStream.getTracks === 'function') {
+					this._mediaStream.getTracks().forEach(track => track.stop())
+				}
+				this._mediaStream = null
+			},
+			resetRecordingState() {
+				this.clearVoiceTimer()
+				if (this._voiceStartTimeout) clearTimeout(this._voiceStartTimeout)
+				this._voiceStartTimeout = null
+				this.stopMediaStream()
+				this.isRecording = false
+				this.recordingGesture = 'send'
+				this.recordingElapsed = 0
+				this._voiceTouchActive = false
+				this._voiceRecordingStartedAt = 0
+				this._voiceStoppedResult = null
+				this._voiceRecorderType = ''
+				this._voiceStopPromise = null
+				this._voiceStartResolve = null
+				this._voiceStartReject = null
+				this._voiceStopResolve = null
+				this._mediaRecorder = null
+				this._mediaChunks = null
+			},
+			abortVoiceRecording() {
+				this._voiceTouchActive = false
+				this.clearVoiceTimer()
+				try {
+					if (this._voiceRecorderType === 'native' && this._recorderManager) this._recorderManager.stop()
+					if (this._voiceRecorderType === 'h5' && this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
+						this._mediaRecorder.stop()
+					}
+				} catch (error) {
+					console.warn('[Chat] 释放录音器失败', error)
+				}
+				this.resetRecordingState()
+			},
+			playAudioMessage(message) {
+				if (!message || !message.url || typeof uni.createInnerAudioContext !== 'function') return
+				if (this.audioPlayingId === message.id) {
+					this.destroyAudioPlayer()
+					return
+				}
+				this.destroyAudioPlayer()
+				const player = uni.createInnerAudioContext()
+				this._audioPlayer = player
+				this.audioPlayingId = message.id
+				player.src = message.url
+				player.onEnded(() => this.destroyAudioPlayer())
+				player.onError(error => {
+					this.destroyAudioPlayer()
+					uni.showToast({ title: '语音播放失败', icon: 'none' })
+					console.error('[Chat] 播放语音失败', error)
+				})
+				player.play()
+			},
+			destroyAudioPlayer() {
+				if (this._audioPlayer) {
+					try {
+						this._audioPlayer.stop()
+						this._audioPlayer.destroy()
+					} catch (error) {
+						console.warn('[Chat] 释放语音播放器失败', error)
+					}
+				}
+				this._audioPlayer = null
+				this.audioPlayingId = ''
 			},
 			closePanel() {
 				if (this.activePanel) this.activePanel = ''
@@ -1643,12 +2270,18 @@
 					})
 					return
 				}
+				const sent = await this.sendTextContent(content)
+				if (sent) this.draft = ''
+			},
+			/** 文本输入框与语音转文字编辑页共用同一套云信文本发送逻辑。 */
+			async sendTextContent(content) {
+				if (this.isSendingMessage || this.isSelectingImage) return false
 				if (!this.conversationId || !isNimLoggedIn()) {
 					uni.showToast({
 						title: '聊天服务尚未就绪',
 						icon: 'none'
 					})
-					return
+					return false
 				}
 
 				this.isSendingMessage = true
@@ -1659,15 +2292,16 @@
 					if (!result || !result.message) throw new Error('消息发送失败：SDK 未返回消息')
 
 					this.mergeMessages([result.message])
-					this.draft = ''
 					this.activePanel = ''
 					this.$nextTick(() => this.scrollToBottom(true))
+					return true
 				} catch (error) {
 					uni.showToast({
 						title: error && error.message ? error.message : '消息发送失败',
 						icon: 'none'
 					})
 					console.error('[Chat] 发送云信消息失败', error)
+					return false
 				} finally {
 					this.isSendingMessage = false
 				}
@@ -1697,6 +2331,10 @@
 				}
 				if (item && item.key === 'camera') {
 					this.selectAndSendImage('camera')
+					return
+				}
+				if (item && item.key === 'audio') {
+					this.enterVoiceMode()
 					return
 				}
 				uni.showToast({
@@ -1895,6 +2533,30 @@
 			max-height: 420rpx;
 		}
 
+		.message-bubble--audio {
+			min-width: 150rpx;
+			padding-top: 10rpx;
+			padding-bottom: 10rpx;
+		}
+
+		.audio-message-content {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 24rpx;
+			min-height: 50rpx;
+		}
+
+		.audio-message-icon {
+			font-size: 26rpx;
+			line-height: 1;
+		}
+
+		.audio-message-duration {
+			font-size: 24rpx;
+			line-height: 1;
+		}
+
 		.message-text {
 			display: flex;
 			flex-wrap: wrap;
@@ -2038,6 +2700,213 @@
 			&::after {
 				border: none;
 			}
+		}
+	}
+
+	.voice-record-mask,
+	.voice-text-mask {
+		position: fixed;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 120;
+		background: rgba(0, 0, 0, 0.72);
+	}
+
+	.voice-record-card {
+		position: absolute;
+		top: 43%;
+		left: 50%;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		box-sizing: border-box;
+		width: 360rpx;
+		min-height: 176rpx;
+		padding: 28rpx 30rpx 22rpx;
+		color: #17370c;
+		background: #91ed61;
+		border-radius: 28rpx;
+		transform: translate(-50%, -50%);
+
+		&::after {
+			position: absolute;
+			bottom: -20rpx;
+			left: 50%;
+			width: 40rpx;
+			height: 40rpx;
+			content: '';
+			background: #91ed61;
+			border-radius: 4rpx;
+			transform: translateX(-50%) rotate(45deg);
+		}
+	}
+
+	.voice-wave {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 52rpx;
+
+		.voice-wave-bar {
+			display: block;
+			width: 4rpx;
+			height: 18rpx;
+			margin: 0 2rpx;
+			background: #3e9530;
+			border-radius: 4rpx;
+			animation: voice-wave-pulse 0.72s ease-in-out infinite alternate;
+		}
+
+		&.voice-wave--warning .voice-wave-bar {
+			background: #dd6b35;
+		}
+	}
+
+	.voice-record-status {
+		position: relative;
+		z-index: 1;
+		margin-top: 12rpx;
+		font-size: 30rpx;
+		font-weight: 600;
+	}
+
+	.voice-record-countdown {
+		position: relative;
+		z-index: 1;
+		margin-top: 6rpx;
+		font-size: 24rpx;
+		color: #b54b28;
+	}
+
+	.voice-record-actions {
+		position: absolute;
+		right: 34rpx;
+		bottom: calc(150rpx + env(safe-area-inset-bottom));
+		left: 34rpx;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.voice-record-action {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		box-sizing: border-box;
+		width: 290rpx;
+		height: 104rpx;
+		font-size: 29rpx;
+		font-weight: 600;
+		color: #ffffff;
+		background: rgba(255, 255, 255, 0.14);
+		border: 2rpx solid rgba(255, 255, 255, 0.1);
+		border-radius: 70rpx 70rpx 42rpx 42rpx;
+		transition: background 0.12s ease, transform 0.12s ease;
+
+		&.voice-record-action--active {
+			color: #17370c;
+			background: #91ed61;
+			transform: translateY(-10rpx);
+		}
+	}
+
+	.voice-text-mask {
+		z-index: 130;
+		background: rgba(27, 27, 27, 0.82);
+	}
+
+	.voice-text-close {
+		position: absolute;
+		top: calc(28rpx + env(safe-area-inset-top));
+		left: 30rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 60rpx;
+		height: 60rpx;
+		font-size: 56rpx;
+		font-weight: 200;
+		line-height: 1;
+		color: #ffffff;
+	}
+
+	.voice-text-editor-wrap {
+		position: absolute;
+		top: 43%;
+		left: 50%;
+		width: calc(100% - 80rpx);
+		transform: translate(-50%, -50%);
+
+		&::after {
+			position: absolute;
+			right: 86rpx;
+			bottom: -18rpx;
+			width: 36rpx;
+			height: 36rpx;
+			content: '';
+			background: #91ed61;
+			border-radius: 4rpx;
+			transform: rotate(45deg);
+		}
+	}
+
+	.voice-text-editor {
+		position: relative;
+		z-index: 1;
+		box-sizing: border-box;
+		width: 100%;
+		height: 180rpx;
+		padding: 28rpx 34rpx;
+		font-size: 34rpx;
+		line-height: 1.55;
+		color: #111111;
+		background: #91ed61;
+		border-radius: 28rpx;
+	}
+
+	.voice-text-footer {
+		position: absolute;
+		right: 44rpx;
+		bottom: calc(90rpx + env(safe-area-inset-bottom));
+		left: 44rpx;
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 20rpx;
+	}
+
+	.voice-text-action {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		box-sizing: border-box;
+		height: 88rpx;
+		padding: 0 38rpx;
+		font-size: 28rpx;
+		border-radius: 48rpx;
+
+		&.voice-text-action--audio {
+			color: #f1f1f1;
+			background: rgba(255, 255, 255, 0.16);
+		}
+
+		&.voice-text-action--text {
+			min-width: 210rpx;
+			color: #111111;
+			background: #f5f5f5;
+		}
+	}
+
+	@keyframes voice-wave-pulse {
+		from {
+			height: 12rpx;
+		}
+
+		to {
+			height: 46rpx;
 		}
 	}
 

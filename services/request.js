@@ -161,7 +161,7 @@ function parseAuthCookie(rawCookie) {
 }
 
 function getAuthFromCookie() {
-	return { PersonId: 210902, Token: '3MERPYf1aTvEUVKCJvea' }
+	return { PersonId: 210902, Token: 'qS3J92OnxYrDzDkephVf' }
 	
 	const personalCookie = getRawCookie(AUTH_COOKIE_KEYS.PERSONAL)
 	if (!personalCookie) return { PersonId: '', Token: '' }

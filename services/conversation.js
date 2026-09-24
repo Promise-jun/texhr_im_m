@@ -293,7 +293,9 @@ export function normalizeConversation(conversation, now = Date.now()) {
 		stickTop: Boolean(conversation && conversation.stickTop),
 		mute: Boolean(conversation && conversation.mute),
 		unreadCount,
-		unreadText: unreadCount > 99 ? '99+' : String(unreadCount)
+		unreadText: unreadCount > 99 ? '99+' : String(unreadCount),
+		// 页面级新消息监听的兜底标记；SDK 未及时更新 unreadCount 时仍能显示红点。
+		hasNewMessage: Boolean(conversation && conversation.hasNewMessage)
 	}
 }
 

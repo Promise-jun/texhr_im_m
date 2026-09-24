@@ -16,12 +16,16 @@ export const NIM_EVENT = Object.freeze({
 	CONVERSATION_CREATED: 'nim:conversation-created',
 	CONVERSATION_CHANGED: 'nim:conversation-changed',
 	CONVERSATION_DELETED: 'nim:conversation-deleted',
-	TOTAL_UNREAD_COUNT_CHANGED: 'nim:total-unread-count-changed'
+	TOTAL_UNREAD_COUNT_CHANGED: 'nim:total-unread-count-changed',
+	// SDK 收到一批新消息后统一转发给页面，避免每个页面重复直接绑定 SDK。
+	MESSAGE_RECEIVED: 'nim:message-received'
 })
 
 let nimInstance = null
 let loginPromise = null
 let lastLoginError = null
+// 当前前台聊天会话 ID；消息列表页据此避免给正在查看的会话重复显示红点。
+let activeConversationId = ''
 
 function emit(eventName, payload) {
 	if (typeof uni !== 'undefined' && typeof uni.$emit === 'function') {
@@ -94,6 +98,27 @@ function bindConversationListeners(nim) {
 }
 
 /**
+ * 在 SDK 单例层监听新消息，并转成 uni 全局事件。
+ *
+ * 监听必须早于页面打开，才能覆盖 App 登录后的离线消息同步以及页面切换期间的实时消息。
+ * 页面只负责按自己的场景过滤消息，不再直接操作 V2NIMMessageService 监听器。
+ */
+function bindMessageListeners(nim) {
+	const messageService = nim.V2NIMMessageService
+	if (!messageService || typeof messageService.on !== 'function') {
+		console.warn('[NIM] 当前 SDK 不支持消息服务，无法监听新消息')
+		return
+	}
+
+	messageService.on('onReceiveMessages', messageList => {
+		const receivedMessages = Array.isArray(messageList) ? messageList.filter(Boolean) : []
+		if (!receivedMessages.length) return
+		// 保留 SDK 原始消息对象，聊天页需要完整消息结构渲染文本、图片和语音。
+		emit(NIM_EVENT.MESSAGE_RECEIVED, receivedMessages)
+	})
+}
+
+/**
  * 创建并返回全局唯一的云信 IM 实例。
  * 初始化只需要 AppKey，不会在没有账号凭证时发起登录。
  */
@@ -108,6 +133,7 @@ export function initNim() {
 
 	bindLoginListeners(nimInstance)
 	bindConversationListeners(nimInstance)
+	bindMessageListeners(nimInstance)
 	return nimInstance
 }
 
@@ -215,11 +241,31 @@ export function getNimLoginError() {
 	return lastLoginError
 }
 
+/** 标记当前正在前台查看的聊天会话，供消息列表页判断是否需要显示红点。 */
+export function setActiveConversationId(conversationId) {
+	activeConversationId = conversationId ? String(conversationId) : ''
+}
+
+export function getActiveConversationId() {
+	return activeConversationId
+}
+
+/** 仅清除仍属于当前页面的会话，避免旧页面误清理新打开的会话。 */
+export function clearActiveConversationId(conversationId) {
+	if (!conversationId || activeConversationId === String(conversationId)) {
+		activeConversationId = ''
+	}
+}
+
 export async function destroyNim() {
-	if (!nimInstance) return
+	if (!nimInstance) {
+		activeConversationId = ''
+		return
+	}
 
 	await nimInstance.destroy()
 	nimInstance = null
 	loginPromise = null
 	lastLoginError = null
+	activeConversationId = ''
 }

@@ -1,5 +1,10 @@
 import App from './App'
 
+// #ifdef H5
+import { initVConsole } from './utils/vconsole'
+initVConsole()
+// #endif
+
 // #ifndef VUE3
 import Vue from 'vue'
 import './uni.promisify.adaptor'

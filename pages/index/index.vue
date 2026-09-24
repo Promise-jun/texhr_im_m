@@ -4,7 +4,11 @@
 			<view class="back-button" aria-label="返回" @click="navigateBack">
 				<text class="back-icon"></text>
 			</view>
-			<text class="navigation-title">消息列表</text>
+			<view class="navigation-title-wrap">
+				<text class="navigation-title">消息列表</text>
+				<!-- 全局新消息提示：即使 SDK 会话未及时回推未读数，也先给出红点反馈。 -->
+				<text v-if="hasNewMessage" class="navigation-dot"></text>
+			</view>
 		</view>
 
 		<view class="tabs">
@@ -19,9 +23,9 @@
 				:class="{ 'is-stick-top': conversation.stickTop }" @click="openConversation(conversation)">
 				<view class="avatar-wrap">
 					<image :src="conversation.avatar" class="avatar" mode="aspectFill"></image>
-					<text v-if="conversation.unreadCount > 0" class="unread-badge"
-						:class="{ 'is-muted': conversation.mute }">
-						{{ conversation.mute ? '' : conversation.unreadText }}
+					<text v-if="conversation.unreadCount > 0 || conversation.hasNewMessage" class="unread-badge"
+						:class="{ 'is-muted': conversation.mute, 'is-dot': conversation.hasNewMessage && conversation.unreadCount <= 0 }">
+						{{ conversation.mute || conversation.unreadCount <= 0 ? '' : conversation.unreadText }}
 					</text>
 				</view>
 				<view class="conversation-content">
@@ -52,6 +56,7 @@
 <script>
 	import {
 		NIM_EVENT,
+		getActiveConversationId,
 		getNimLoginError,
 		isNimLoggedIn
 	} from '../../services/nim'
@@ -84,7 +89,9 @@
 				isHistoryLoading: true,
 				loadError: '',
 				historyLoadError: '',
-				currentTime: Date.now()
+				currentTime: Date.now(),
+				// 新消息事件是页面级兜底状态，列表项上的 hasNewMessage 会进一步定位到具体会话。
+				hasNewMessage: false
 			}
 		},
 		computed: {
@@ -147,6 +154,7 @@
 				uni.$on(NIM_EVENT.CONVERSATION_CREATED, this.handleConversationCreated)
 				uni.$on(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
 				uni.$on(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
+				uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.handleMessageReceived)
 			},
 			unbindConversationEvents() {
 				uni.$off(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
@@ -156,6 +164,7 @@
 				uni.$off(NIM_EVENT.CONVERSATION_CREATED, this.handleConversationCreated)
 				uni.$off(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
 				uni.$off(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
+				uni.$off(NIM_EVENT.MESSAGE_RECEIVED, this.handleMessageReceived)
 			},
 			handleLoginStatus(status) {
 				if (status !== 1) return
@@ -183,10 +192,33 @@
 			},
 			handleConversationDeleted(conversationIds) {
 				const deletedIdSet = new Set(Array.isArray(conversationIds) ? conversationIds : [])
+				if (this._newConversationIds) {
+					deletedIdSet.forEach(conversationId => this._newConversationIds.delete(String(conversationId)))
+				}
 				this.rawConversations = this.rawConversations.filter(conversation => {
 					return !deletedIdSet.has(conversation.conversationId)
 				})
+				this.refreshGlobalNewMessageIndicator()
 				if (this._conversationLoadPromise) this._conversationReloadPending = true
+			},
+			handleMessageReceived(messageList) {
+				const activeConversationId = getActiveConversationId()
+				// 当前聊天页会自己消费当前会话消息；消息列表只提示其它会话，避免重复红点。
+				const otherConversationMessages = (Array.isArray(messageList) ? messageList : [])
+					.filter(message => message && !message.isSelf && message.conversationId &&
+						message.conversationId !== activeConversationId)
+				if (!otherConversationMessages.length) return
+
+				this.hasNewMessage = true
+				const changedIds = new Set(otherConversationMessages.map(message => String(message.conversationId)))
+				this._newConversationIds = this._newConversationIds || new Set()
+				changedIds.forEach(conversationId => this._newConversationIds.add(conversationId))
+				this.rawConversations = this.rawConversations.map(conversation => {
+					if (!conversation || !changedIds.has(String(conversation.conversationId))) return conversation
+					return { ...conversation, hasNewMessage: true }
+				})
+				// 拉取最新会话可同步新会话、消息摘要、时间和排序；定时器会合并同批消息的重复刷新。
+				this.scheduleConversationReload()
 			},
 			upsertConversations(conversationList) {
 				if (!Array.isArray(conversationList) || !conversationList.length) return
@@ -197,14 +229,20 @@
 				conversationList.forEach(conversation => {
 					if (!conversation || !conversation.conversationId) return
 					const previous = conversationMap.get(conversation.conversationId) || {}
+					const isTrackedNewMessage = this._newConversationIds &&
+						this._newConversationIds.has(String(conversation.conversationId))
 					conversationMap.set(conversation.conversationId, {
 						...previous,
-						...conversation
+						...conversation,
+						// 会话变更事件通常不携带页面兜底标记，不能覆盖已收到的新消息红点。
+						hasNewMessage: conversation.hasNewMessage === undefined ?
+							Boolean(previous.hasNewMessage || isTrackedNewMessage) : Boolean(conversation.hasNewMessage)
 					})
 				})
 
 				this.currentTime = Date.now()
 				this.rawConversations = Array.from(conversationMap.values())
+				this.refreshGlobalNewMessageIndicator()
 				if (this._conversationLoadPromise) this._conversationReloadPending = true
 			},
 			scheduleConversationReload() {
@@ -238,7 +276,16 @@
 					.then(conversationList => {
 						if (!this._conversationPageAlive) return
 						this.currentTime = Date.now()
-						this.rawConversations = conversationList
+						const previousFlags = new Map(this.rawConversations.map(conversation => [
+							conversation.conversationId,
+							Boolean(conversation.hasNewMessage)
+						]))
+						this.rawConversations = conversationList.map(conversation => ({
+							...conversation,
+							hasNewMessage: previousFlags.get(conversation.conversationId) ||
+								(this._newConversationIds && this._newConversationIds.has(String(conversation.conversationId))) || false
+						}))
+						this.refreshGlobalNewMessageIndicator()
 					})
 					.catch(error => {
 						if (!this._conversationPageAlive) return
@@ -308,6 +355,7 @@
 				uni.navigateTo({
 					url: `/pages/chat/chat?id=${encodeURIComponent(conversation.id)}&name=${encodeURIComponent(conversation.name)}`,
 					success: () => {
+						this.clearNewMessageIndicator(conversation && conversation.id)
 						// 用户已进入会话，清除未读数；SDK 变更事件会同步刷新列表红点。
 						if (conversation.isHistory) return
 						markNimConversationRead(conversation.id).catch(error => {
@@ -315,6 +363,24 @@
 						})
 					}
 				})
+			},
+			clearNewMessageIndicator(conversationId) {
+				if (!conversationId) return
+				if (this._newConversationIds) this._newConversationIds.delete(String(conversationId))
+				this.rawConversations = this.rawConversations.map(conversation => {
+					if (!conversation || conversation.conversationId !== conversationId) return conversation
+					return { ...conversation, hasNewMessage: false }
+				})
+				this.refreshGlobalNewMessageIndicator()
+			},
+			refreshGlobalNewMessageIndicator() {
+				const activeConversationId = getActiveConversationId()
+				const hasTrackedMessage = this._newConversationIds && Array.from(this._newConversationIds)
+					.some(conversationId => conversationId !== activeConversationId)
+				this.hasNewMessage = this.rawConversations.some(conversation => {
+					return conversation && conversation.conversationId !== activeConversationId &&
+						(Boolean(conversation.hasNewMessage) || Number(conversation.unreadCount) > 0)
+				}) || Boolean(hasTrackedMessage)
 			}
 		}
 	}
@@ -366,6 +432,24 @@
 				font-size: 32rpx;
 				font-weight: 400;
 				color: #222222;
+			}
+
+			.navigation-title-wrap {
+				position: relative;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+
+			.navigation-dot {
+				position: absolute;
+				top: -4rpx;
+				right: -18rpx;
+				width: 14rpx;
+				height: 14rpx;
+				background: #f04444;
+				border: 2rpx solid #ffffff;
+				border-radius: 50%;
 			}
 		}
 
@@ -461,6 +545,14 @@
 							width: 16rpx;
 							height: 16rpx;
 							padding: 0;
+						}
+
+						&.is-dot {
+							min-width: 16rpx;
+							width: 16rpx;
+							height: 16rpx;
+							padding: 0;
+							border-radius: 50%;
 						}
 					}
 				}

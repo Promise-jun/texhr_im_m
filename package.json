@@ -4,6 +4,7 @@
   "private": true,
   "description": "TexHR mobile IM client",
   "dependencies": {
-    "nim-web-sdk-ng": ">=10"
+    "nim-web-sdk-ng": ">=10",
+    "vconsole": "^3.15.1"
   }
 }
