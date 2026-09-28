@@ -116,20 +116,6 @@
 			}
 		},
 		async onLoad() {
-			// try {
-			// 	const response = await requestApi({
-			// 		Name: "Chat.MyChat.Limits",
-			// 		Content: {
-			// 			JobId: '86171',
-			// 			ResumeId: '155883'
-			// 		}
-			// 	})
-			// 	console.log(123, response)
-			// } catch (e) {
-			// 	//TODO handle the exception
-			// 	console.log(456)
-			// }
-
 			this._conversationPageAlive = true
 			this.bindConversationEvents()
 		},

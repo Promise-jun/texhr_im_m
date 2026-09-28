@@ -46,13 +46,21 @@
 						class="system-message">
 						{{ message.content }}
 					</view>
+					<view v-else-if="message.type === 'revoked'" :id="messageAnchor(message.id)" :key="message.id"
+						class="revoked-message">
+						<view class="revoked-message-inner">
+							<text class="revoked-message-text">{{ message.content }}</text>
+							<text class="revoked-message-edit" @click.stop="reEditMessage(message)">重新编辑</text>
+						</view>
+					</view>
 					<view v-else :id="messageAnchor(message.id)" :key="message.id" class="message-row"
 						:class="message.direction">
 						<image :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
 							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
 						<view class="message-bubble"
 							:class="{ 'message-bubble--image': message.type === 'image', 'message-bubble--audio': message.type === 'audio' }"
-							@click.stop="message.type === 'audio' && playAudioMessage(message)">
+							@click.stop="message.type === 'audio' && playAudioMessage(message)"
+							@longpress.stop.prevent="isTextMessage(message) && handleMessageLongPress(message)">
 							<image v-if="message.type === 'image'" :src="message.url" class="message-image"
 								mode="widthFix" @click.stop="previewImage(message.url)"></image>
 							<view v-else-if="message.type === 'audio'" class="audio-message-content">
@@ -276,6 +284,14 @@
 	const MAX_VOICE_DURATION = 60 * 1000
 	const VOICE_COUNTDOWN_DURATION = 10 * 1000
 	const MIN_VOICE_DURATION = 1000
+	const BLOCKED_USER_SEND_WARNING = '对方在您的黑名单中，无法回复您的消息'
+	const ENTERPRISE_BLOCKED_SEND_CODE = '102426'
+	const ENTERPRISE_BLOCKED_SEND_MESSAGE = '该企业已屏蔽您的消息，暂不能发送消息'
+	const MESSAGE_REVOKE_EXPIRED_CODE = '107314'
+	const MESSAGE_REVOKE_EXPIRED_MESSAGE = '发送时间超过2分钟的消息，不能被撤回'
+	const MESSAGE_REEDIT_LIMIT = 5 * 60 * 1000
+	const REVOKED_MESSAGE_TEXT = '你撤回了一条消息'
+	const MESSAGE_REEDIT_EXPIRED_MESSAGE = '发送时间超过5分钟的消息，不能重新编辑'
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const MAN_AVATAR = '/static/man_avatar.png'
 	const WOMAN_AVATAR = '/static/woman_avatar.png'
@@ -302,6 +318,39 @@
 		} catch (error) {
 			throw new Error(errorMessage)
 		}
+	}
+
+	function getErrorCode(error) {
+		if (!error || typeof error !== 'object') return ''
+		const candidates = [
+			error.code,
+			error.Code,
+			error.errCode,
+			error.errorCode,
+			error.data && error.data.code,
+			error.data && error.data.Code,
+			error.detail && error.detail.code,
+			error.detail && error.detail.Code
+		]
+		const code = candidates.find(value => value !== undefined && value !== null && value !== '')
+		return code === undefined ? '' : String(code)
+	}
+
+	function isEnterpriseBlockedSendError(error) {
+		return getErrorCode(error) === ENTERPRISE_BLOCKED_SEND_CODE
+	}
+
+	function isMessageRevokeExpiredError(error) {
+		if (getErrorCode(error) === MESSAGE_REVOKE_EXPIRED_CODE) return true
+		const errorMessage = error && (error.message || error.errMsg || error.desc) ?
+			String(error.message || error.errMsg || error.desc) :
+			''
+		return errorMessage.includes(MESSAGE_REVOKE_EXPIRED_CODE)
+	}
+
+	function getSendFailureMessage(error, fallbackMessage) {
+		if (isEnterpriseBlockedSendError(error)) return ENTERPRISE_BLOCKED_SEND_MESSAGE
+		return error && error.message ? error.message : fallbackMessage
 	}
 
 	function getMessageId(message) {
@@ -395,7 +444,19 @@
 		const base = {
 			id,
 			timestamp: Number(message && message.createTime) || 0,
-			direction: message && message.isSelf ? 'self' : 'other'
+			direction: message && message.isSelf ? 'self' : 'other',
+			messageType
+		}
+
+		if (message && message.isRevoked) {
+			return {
+				...base,
+				type: 'revoked',
+				content: REVOKED_MESSAGE_TEXT,
+				originalText: message.revokedText !== undefined ?
+					String(message.revokedText) :
+					String(message.text || '')
+			}
 		}
 
 		if (messageType === 0) {
@@ -489,6 +550,9 @@
 				],
 				isPinned: false,
 				isUpdatingPin: false,
+				isCheckingBlockStatus: false,
+				isUpdatingBlockStatus: false,
+				isOtherBlocked: false,
 				draft: '',
 				inputFocused: false,
 				isVoiceMode: false,
@@ -512,6 +576,7 @@
 				historyLoadError: '',
 				messages: [],
 				isSendingMessage: false,
+				messageActionId: '',
 				isSelectingImage: false,
 				imageUploadProgress: 0,
 				commonPhrases: [],
@@ -543,11 +608,11 @@
 						label: '相机',
 						iconUrl: '/static/icon_camera.png'
 					},
-					{
-						key: 'audio',
-						label: '语音',
-						iconUrl: '/static/icon_audio.png'
-					}
+					// {
+					// 	key: 'audio',
+					// 	label: '语音',
+					// 	iconUrl: '/static/icon_audio.png'
+					// }
 				]
 			}
 		},
@@ -947,6 +1012,186 @@
 				// SDK 消息 ID 可能带特殊字符，转换后再作为 scroll-into-view 的锚点。
 				return `message-${String(id).replace(/[^a-zA-Z0-9_-]/g, '-')}`
 			},
+			isTextMessage(message) {
+				return Boolean(message && message.type === 'text' && Number(message.messageType) === 0)
+			},
+			findRawMessage(message) {
+				const messageId = message && typeof message === 'object' ? message.id : message
+				if (messageId === undefined || messageId === null) return null
+				const targetId = String(messageId)
+				return this.messages.find(item => getMessageId(item) === targetId) || null
+			},
+			handleMessageLongPress(message) {
+				if (!this.isTextMessage(message) || !this.findRawMessage(message)) return
+
+				const actionKeys = message.direction === 'self' ?
+					['copy', 'revoke', 'delete'] :
+					['copy', 'delete']
+				const actionLabels = {
+					copy: '复制',
+					revoke: '撤回',
+					delete: '删除'
+				}
+
+				uni.showActionSheet({
+					itemList: actionKeys.map(key => actionLabels[key]),
+					success: result => {
+						const actionKey = actionKeys[result.tapIndex]
+						if (actionKey) this.handleMessageAction(actionKey, message)
+					},
+					fail: () => {}
+				})
+			},
+			handleMessageAction(action, message) {
+				if (action === 'copy') {
+					this.copyTextMessage(message)
+					return
+				}
+				if (action === 'revoke') {
+					this.confirmMessageAction('revoke', message)
+					return
+				}
+				if (action === 'delete') this.confirmMessageAction('delete', message)
+			},
+			copyTextMessage(message) {
+				const rawMessage = this.findRawMessage(message)
+				const content = rawMessage && rawMessage.text !== undefined ?
+					String(rawMessage.text) :
+					String(message && message.content || '')
+				if (!content) {
+					uni.showToast({ title: '没有可复制的内容', icon: 'none' })
+					return
+				}
+				if (typeof uni.setClipboardData !== 'function') {
+					uni.showToast({ title: '当前环境不支持复制', icon: 'none' })
+					return
+				}
+
+				uni.setClipboardData({
+					data: content,
+					success: () => uni.showToast({ title: '已复制', icon: 'none' }),
+					fail: error => {
+						uni.showToast({ title: '复制失败', icon: 'none' })
+						console.error('[Chat] 复制消息失败', error)
+					}
+				})
+			},
+			confirmMessageAction(action, message) {
+				const isRevoke = action === 'revoke'
+				uni.showModal({
+					title: isRevoke ? '撤回消息' : '删除消息',
+					content: isRevoke ? '确定要撤回这条消息吗？' : '确定要删除这条消息吗？',
+					confirmText: isRevoke ? '撤回' : '删除',
+					confirmColor: '#e64340',
+					success: result => {
+						if (!result || !result.confirm) return
+						if (isRevoke) this.revokeTextMessage(message)
+						else this.deleteTextMessage(message)
+					}
+				})
+			},
+			markMessageAsRevoked(message, originalText) {
+				const messageId = message && typeof message === 'object' ? message.id : message
+				if (messageId === undefined || messageId === null) return
+				const targetId = String(messageId)
+				this.messages = this.messages.map(item => {
+					if (getMessageId(item) !== targetId) return item
+					return {
+						...item,
+						isRevoked: true,
+						revokedText: originalText
+					}
+				})
+			},
+			removeMessage(message) {
+				const messageId = message && typeof message === 'object' ? message.id : message
+				if (messageId === undefined || messageId === null) return
+				const targetId = String(messageId)
+				this.messages = this.messages.filter(item => getMessageId(item) !== targetId)
+			},
+			reEditMessage(message) {
+				const rawMessage = this.findRawMessage(message)
+				const messageTime = Number(message && message.timestamp) ||
+					Number(rawMessage && rawMessage.createTime) ||
+					0
+				if (!messageTime || Date.now() - messageTime > MESSAGE_REEDIT_LIMIT) {
+					uni.showToast({
+						title: MESSAGE_REEDIT_EXPIRED_MESSAGE,
+						icon: 'none'
+					})
+					return
+				}
+
+				const originalText = message && message.originalText !== undefined ?
+					String(message.originalText) :
+					rawMessage && rawMessage.revokedText !== undefined ?
+						String(rawMessage.revokedText) :
+						''
+				if (!originalText) {
+					uni.showToast({ title: '未获取到原消息内容', icon: 'none' })
+					return
+				}
+
+				this.draft = originalText
+				this.isVoiceMode = false
+				this.activePanel = ''
+				this.isEditingCommonPhrases = false
+				this.inputFocused = true
+				this.$nextTick(() => this.scrollToBottom(false))
+			},
+			async revokeTextMessage(message) {
+				const rawMessage = this.findRawMessage(message)
+				if (!rawMessage || this.messageActionId) return
+				const messageId = getMessageId(rawMessage)
+				const originalText = rawMessage.text !== undefined ? String(rawMessage.text) : ''
+				const messageService = getNimInstance().V2NIMMessageService
+				if (!messageService || typeof messageService.revokeMessage !== 'function') {
+					uni.showToast({ title: '当前聊天服务不支持撤回消息', icon: 'none' })
+					return
+				}
+
+				this.messageActionId = messageId
+				try {
+					await messageService.revokeMessage(rawMessage)
+					this.markMessageAsRevoked(message, originalText)
+					uni.showToast({ title: '消息已撤回', icon: 'none' })
+				} catch (error) {
+					uni.showToast({
+						title: isMessageRevokeExpiredError(error) ?
+							MESSAGE_REVOKE_EXPIRED_MESSAGE :
+							error && error.message ? error.message : '撤回消息失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 撤回消息失败', error)
+				} finally {
+					if (this.messageActionId === messageId) this.messageActionId = ''
+				}
+			},
+			async deleteTextMessage(message) {
+				const rawMessage = this.findRawMessage(message)
+				if (!rawMessage || this.messageActionId) return
+				const messageId = getMessageId(rawMessage)
+				const messageService = getNimInstance().V2NIMMessageService
+				if (!messageService || typeof messageService.deleteMessage !== 'function') {
+					uni.showToast({ title: '当前聊天服务不支持删除消息', icon: 'none' })
+					return
+				}
+
+				this.messageActionId = messageId
+				try {
+					await messageService.deleteMessage(rawMessage)
+					this.removeMessage(message)
+					uni.showToast({ title: '消息已删除', icon: 'none' })
+				} catch (error) {
+					uni.showToast({
+						title: error && error.message ? error.message : '删除消息失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 删除消息失败', error)
+				} finally {
+					if (this.messageActionId === messageId) this.messageActionId = ''
+				}
+			},
 			navigateBack() {
 				const pages = getCurrentPages()
 				if (pages.length > 1) {
@@ -967,16 +1212,151 @@
 					return
 				}
 				if (action.key === 'more') {
-					uni.showActionSheet({
-						itemList: ['设置备注', '消息免打扰', '清空聊天记录', '举报'],
-						fail: () => {}
-					})
+					this.openMoreActionMenu()
 					return
 				}
 				uni.showToast({
 					title: '公司主页功能待接入',
 					icon: 'none'
 				})
+			},
+			async openMoreActionMenu() {
+				if (this.isCheckingBlockStatus) return
+				if (!this.enterpriseAccId) {
+					uni.showToast({
+						title: this.isCheckingLimits ? '沟通信息加载中，请稍候' : '未获取到聊天对象账号',
+						icon: 'none'
+					})
+					return
+				}
+				if (!isNimLoggedIn()) {
+					uni.showToast({
+						title: '聊天服务尚未就绪',
+						icon: 'none'
+					})
+					return
+				}
+
+				const userService = getNimInstance().V2NIMUserService
+				if (!userService || typeof userService.checkBlock !== 'function') {
+					uni.showToast({
+						title: '当前聊天服务不支持黑名单状态查询',
+						icon: 'none'
+					})
+					return
+				}
+
+				this.isCheckingBlockStatus = true
+				uni.showLoading({
+					title: '加载中',
+					mask: true
+				})
+				try {
+					const blockStatus = await userService.checkBlock([this.enterpriseAccId])
+					if (!this._chatPageAlive) return
+
+					this.isOtherBlocked = Boolean(blockStatus && blockStatus[this.enterpriseAccId])
+					uni.showActionSheet({
+						itemList: [
+							this.isOtherBlocked ? '允许TA发消息' : '不允许TA发消息',
+							'举报'
+						],
+						success: result => {
+							if (result.tapIndex === 0) this.handleMessagePermissionAction()
+							else if (result.tapIndex === 1) this.handleReportAction()
+						},
+						fail: () => {}
+					})
+				} catch (error) {
+					if (!this._chatPageAlive) return
+					uni.showToast({
+						title: error && error.message ? error.message : '查询黑名单状态失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 查询用户云信黑名单状态失败', error)
+				} finally {
+					uni.hideLoading()
+					if (this._chatPageAlive) this.isCheckingBlockStatus = false
+				}
+			},
+			handleReportAction() {
+				uni.showToast({
+					title: '举报功能暂未接入',
+					icon: 'none'
+				})
+			},
+			async handleMessagePermissionAction() {
+				if (this.isUpdatingBlockStatus || !this.enterpriseAccId) return
+
+				const userService = getNimInstance().V2NIMUserService
+				const shouldRemoveFromBlockList = this.isOtherBlocked
+				const methodName = shouldRemoveFromBlockList ?
+					'removeUserFromBlockList' :
+					'addUserToBlockList'
+				if (!userService || typeof userService[methodName] !== 'function') {
+					uni.showToast({
+						title: '当前聊天服务不支持黑名单操作',
+						icon: 'none'
+					})
+					return
+				}
+
+				let toastTitle = ''
+				let operationSucceeded = false
+				this.isUpdatingBlockStatus = true
+				uni.showLoading({
+					title: '处理中',
+					mask: true
+				})
+				try {
+					await userService[methodName](this.enterpriseAccId)
+					if (!this._chatPageAlive) return
+
+					this.isOtherBlocked = !shouldRemoveFromBlockList
+					operationSucceeded = true
+					toastTitle = shouldRemoveFromBlockList ? '取消屏蔽成功' : '屏蔽成功'
+				} catch (error) {
+					toastTitle = error && error.message ? error.message :
+						(shouldRemoveFromBlockList ? '取消屏蔽失败' : '屏蔽失败')
+					console.error('[Chat] 更新用户云信黑名单状态失败', error)
+				} finally {
+					uni.hideLoading()
+					if (this._chatPageAlive) this.isUpdatingBlockStatus = false
+				}
+
+				if (this._chatPageAlive && toastTitle) {
+					uni.showToast({
+						title: toastTitle,
+						icon: operationSucceeded ? 'success' : 'none'
+					})
+				}
+			},
+			async checkOtherBlockedBeforeSend() {
+				if (!this.enterpriseAccId || !isNimLoggedIn()) return false
+
+				const userService = getNimInstance().V2NIMUserService
+				if (!userService || typeof userService.checkBlock !== 'function') {
+					console.warn('[Chat] 当前聊天服务不支持发送前查询黑名单状态')
+					return false
+				}
+
+				try {
+					const blockStatus = await userService.checkBlock([this.enterpriseAccId])
+					const isBlocked = Boolean(blockStatus && blockStatus[this.enterpriseAccId])
+					if (this._chatPageAlive) this.isOtherBlocked = isBlocked
+					if (isBlocked && this._chatPageAlive) {
+						uni.showToast({
+							title: BLOCKED_USER_SEND_WARNING,
+							icon: 'none',
+							duration: 2500
+						})
+					}
+					return isBlocked
+				} catch (error) {
+					// 黑名单状态查询失败不能阻断用户发送本条消息。
+					console.warn('[Chat] 发送前查询用户云信黑名单状态失败，继续发送消息', error)
+					return false
+				}
 			},
 			async updatePinStatus() {
 				if (this.isUpdatingPin) return
@@ -1602,8 +1982,13 @@
 				const voice = this.pendingVoice
 				if (!voice || this.isSendingMessage) return false
 				this.isSendingMessage = true
-				uni.showLoading({ title: '语音发送中...', mask: true })
+				let loadingVisible = false
 				try {
+					const isOtherBlocked = await this.checkOtherBlockedBeforeSend()
+					if (!isOtherBlocked) {
+						uni.showLoading({ title: '语音发送中...', mask: true })
+						loadingVisible = true
+					}
 					const nim = getNimInstance()
 					const message = nim.V2NIMMessageCreator.createAudioMessage(
 						voice.source,
@@ -1619,14 +2004,18 @@
 					this.$nextTick(() => this.scrollToBottom(true))
 					return true
 				} catch (error) {
+					if (loadingVisible) {
+						uni.hideLoading()
+						loadingVisible = false
+					}
 					uni.showToast({
-						title: error && error.message ? error.message : '语音发送失败',
+						title: getSendFailureMessage(error, '语音发送失败'),
 						icon: 'none'
 					})
 					console.error('[Chat] 发送云信语音消息失败', error)
 					return false
 				} finally {
-					uni.hideLoading()
+					if (loadingVisible) uni.hideLoading()
 					this.isSendingMessage = false
 				}
 			},
@@ -1748,6 +2137,32 @@
 				this.quickReplyText = ''
 				this.quickReplyId = null
 			},
+			async persistCommonPhrase(message, phraseId) {
+				const response = await requestApi({
+					Name: COMMON_LANGUAGE_SAVE_API,
+					Content: {
+						Id: phraseId,
+						Msg: message
+					}
+				})
+				const responseCode = response && response.Code !== undefined ?
+					Number(response.Code) :
+					NaN
+				const data = response && response.Data ? response.Data : {}
+				const dataCode = data.Code !== undefined ? Number(data.Code) : 0
+
+				if (responseCode === 4400003 || dataCode === 4400003) {
+					throw new Error('最多只能设置10条常用语')
+				}
+				if (responseCode !== 0) {
+					throw new Error(`保存常用语失败，业务错误码：${responseCode}`)
+				}
+				if (dataCode !== 0) {
+					throw new Error(`保存常用语失败，数据错误码：${dataCode}`)
+				}
+
+				await this.loadCommonPhrases()
+			},
 			async saveCommonPhrase() {
 				if (this.isSavingCommonPhrase) return
 
@@ -1762,33 +2177,11 @@
 
 				this.isSavingCommonPhrase = true
 				try {
-					const response = await requestApi({
-						Name: COMMON_LANGUAGE_SAVE_API,
-						Content: {
-							Id: this.quickReplyId,
-							Msg: message
-						}
-					})
-					const responseCode = response && response.Code !== undefined ?
-						Number(response.Code) :
-						NaN
-					const data = response && response.Data ? response.Data : {}
-					const dataCode = data.Code !== undefined ? Number(data.Code) : 0
-
-					if (responseCode === 4400003 || dataCode === 4400003) {
-						throw new Error('最多只能设置10条常用语')
-					}
-					if (responseCode !== 0) {
-						throw new Error(`保存常用语失败，业务错误码：${responseCode}`)
-					}
-					if (dataCode !== 0) {
-						throw new Error(`保存常用语失败，数据错误码：${dataCode}`)
-					}
+					await this.persistCommonPhrase(message, this.quickReplyId)
 
 					this.showQuickReplyModal = false
 					this.quickReplyText = ''
 					this.quickReplyId = null
-					await this.loadCommonPhrases()
 					uni.showToast({
 						title: '保存成功',
 						icon: 'success'
@@ -1803,8 +2196,8 @@
 					this.isSavingCommonPhrase = false
 				}
 			},
-			sendQuickReply() {
-				if (this.isSavingCommonPhrase) return
+			async sendQuickReply() {
+				if (this.isSavingCommonPhrase || this.isSendingMessage || this.isSelectingImage) return
 
 				const message = this.quickReplyText.trim()
 				if (!message) {
@@ -1815,11 +2208,23 @@
 					return
 				}
 
-				this.showQuickReplyModal = false
-				this.quickReplyText = ''
-				this.quickReplyId = null
-				this.draft = message
-				this.sendMessage()
+				this.isSavingCommonPhrase = true
+				try {
+					await this.persistCommonPhrase(message, this.quickReplyId)
+					this.showQuickReplyModal = false
+					this.quickReplyText = ''
+					this.quickReplyId = null
+					this.draft = message
+					await this.sendMessage()
+				} catch (error) {
+					uni.showToast({
+						title: error && error.message ? error.message : '保存常用语失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 快速回复保存常用语失败', error)
+				} finally {
+					this.isSavingCommonPhrase = false
+				}
 			},
 			handleCommonPhraseAction(action, phrase) {
 				if (action === 'edit') {
@@ -2162,6 +2567,7 @@
 					}).filter(item => item.path)
 					if (!selectedImages.length) return
 
+					this._imageSendErrorCode = ''
 					let oversizeCount = 0
 					let processFailedCount = 0
 					for (let index = 0; index < selectedImages.length; index += 1) {
@@ -2181,16 +2587,19 @@
 						}
 					}
 
-					if (oversizeCount) {
-						uni.showToast({
-							title: '图片大小超过25m，无法发送',
-							icon: 'none'
-						})
-					} else if (processFailedCount) {
-						uni.showToast({
-							title: '部分图片处理失败，请重试',
-							icon: 'none'
-						})
+					// 7101 已在具体图片发送失败时提示，不再用批量汇总提示覆盖。
+					if (this._imageSendErrorCode !== ENTERPRISE_BLOCKED_SEND_CODE) {
+						if (oversizeCount) {
+							uni.showToast({
+								title: '图片大小超过25m，无法发送',
+								icon: 'none'
+							})
+						} else if (processFailedCount) {
+							uni.showToast({
+								title: '部分图片处理失败，请重试',
+								icon: 'none'
+							})
+						}
 					}
 				} catch (error) {
 					const errorText = error && (error.errMsg || error.message) ? (error.errMsg || error.message) : ''
@@ -2201,6 +2610,7 @@
 					})
 					console.error('[Chat] 选择图片失败', error)
 				} finally {
+					this._imageSendErrorCode = ''
 					this.isSelectingImage = false
 				}
 			},
@@ -2213,11 +2623,16 @@
 
 				this.isSendingMessage = true
 				this.imageUploadProgress = 0
-				uni.showLoading({
-					title: total > 1 ? `发送图片 ${current}/${total}` : '图片发送中...',
-					mask: true
-				})
+				let loadingVisible = false
 				try {
+					const isOtherBlocked = await this.checkOtherBlockedBeforeSend()
+					if (!isOtherBlocked) {
+						uni.showLoading({
+							title: total > 1 ? `发送图片 ${current}/${total}` : '图片发送中...',
+							mask: true
+						})
+						loadingVisible = true
+					}
 					const nim = getNimInstance()
 					const message = nim.V2NIMMessageCreator.createImageMessage(
 						image.uploadSource,
@@ -2238,23 +2653,32 @@
 					)
 					if (!result || !result.message) throw new Error('图片发送失败：SDK 未返回消息')
 
-					uni.hideLoading()
+					if (loadingVisible) {
+						uni.hideLoading()
+						loadingVisible = false
+					}
 					this.mergeMessages([result.message])
 					this.activePanel = ''
 					this.$nextTick(() => this.scrollToBottom(true))
 					return true
 				} catch (error) {
-					uni.hideLoading()
+					if (loadingVisible) {
+						uni.hideLoading()
+						loadingVisible = false
+					}
+					const enterpriseBlocked = isEnterpriseBlockedSendError(error)
+					if (enterpriseBlocked) this._imageSendErrorCode = ENTERPRISE_BLOCKED_SEND_CODE
 					// 批量发送时由外层统一提示，避免一张失败弹出两次 Toast。
-					if (total <= 1) {
+					if (total <= 1 || enterpriseBlocked) {
 						uni.showToast({
-							title: error && error.message ? error.message : '图片发送失败',
+							title: getSendFailureMessage(error, '图片发送失败'),
 							icon: 'none'
 						})
 					}
 					console.error('[Chat] 发送云信图片消息失败', error)
 					return false
 				} finally {
+					if (loadingVisible) uni.hideLoading()
 					this.isSendingMessage = false
 					this.imageUploadProgress = 0
 				}
@@ -2286,6 +2710,7 @@
 
 				this.isSendingMessage = true
 				try {
+					await this.checkOtherBlockedBeforeSend()
 					const nim = getNimInstance()
 					const message = nim.V2NIMMessageCreator.createTextMessage(content)
 					const result = await nim.V2NIMMessageService.sendMessage(message, this.conversationId)
@@ -2297,7 +2722,7 @@
 					return true
 				} catch (error) {
 					uni.showToast({
-						title: error && error.message ? error.message : '消息发送失败',
+						title: getSendFailureMessage(error, '消息发送失败'),
 						icon: 'none'
 					})
 					console.error('[Chat] 发送云信消息失败', error)
@@ -2495,6 +2920,37 @@
 		color: #92979c;
 		background: rgba(0, 0, 0, 0.04);
 		border-radius: 8rpx;
+	}
+
+	.revoked-message {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		margin: 0 auto 28rpx;
+	}
+
+	.revoked-message-inner {
+		display: flex;
+		align-items: center;
+		padding: 8rpx 14rpx;
+		background: #e1e5e8;
+		border-radius: 24rpx;
+	}
+
+	.revoked-message-text,
+	.revoked-message-edit {
+		font-size: 22rpx;
+		line-height: 1.5;
+		white-space: nowrap;
+	}
+
+	.revoked-message-text {
+		color: #ffffff;
+	}
+
+	.revoked-message-edit {
+		margin-left: 8rpx;
+		color: #2399ed;
 	}
 
 	.message-row {
