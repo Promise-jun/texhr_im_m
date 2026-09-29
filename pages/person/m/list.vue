@@ -59,16 +59,16 @@
 		getActiveConversationId,
 		getNimLoginError,
 		isNimLoggedIn
-	} from '../../services/nim'
+	} from '../../../services/nim'
 	import {
 		getAllHistoryConversations,
 		getAllNimConversations,
 		markNimConversationRead,
 		normalizeAndSortConversations
-	} from '../../services/conversation'
+	} from '../../../services/conversation'
 	import {
 		requestApi
-	} from '../../services/request'
+	} from '../../../services/request'
 
 	export default {
 		data() {

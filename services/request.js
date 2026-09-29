@@ -1,4 +1,4 @@
-let defaultApiUrl = '/gateway/'
+let defaultApiUrl = '/api/gateway/'
 
 // H5 本地开发时改用 webpack-dev-server 反向代理，避免浏览器跨域限制。
 // #ifdef H5
@@ -161,7 +161,7 @@ function parseAuthCookie(rawCookie) {
 }
 
 function getAuthFromCookie() {
-	return { PersonId: 210902, Token: '26vUYB-aA2MdIZh-eFzP' }
+	return { PersonId: 210902, Token: 'vxvR4CBoYJW4aWZdVVYs' }
 	
 	const personalCookie = getRawCookie(AUTH_COOKIE_KEYS.PERSONAL)
 	if (!personalCookie) return { PersonId: '', Token: '' }

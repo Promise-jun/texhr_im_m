@@ -84,9 +84,12 @@
             "mode" : "history"
         },
         "devServer" : {
+			"https" : false,
+			"port" : 8080,
+			"disableHostCheck" : true,
             "proxy" : {
                 "/api" : {
-                    "target" : "http://openapi.texhr.cn/",
+                    "target" : "https://openapi.texhr.cn/",
                     "changeOrigin" : true,
                     "secure" : false,
                     "pathRewrite" : {

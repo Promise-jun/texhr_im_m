@@ -59,6 +59,7 @@
 							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
 						<view class="message-bubble"
 							:class="{ 'message-bubble--image': message.type === 'image', 'message-bubble--audio': message.type === 'audio' }"
+							:style="message.type === 'audio' ? { width: audioBubbleWidth(message) } : null"
 							@click.stop="message.type === 'audio' && playAudioMessage(message)"
 							@longpress.stop.prevent="isTextMessage(message) && handleMessageLongPress(message)">
 							<image v-if="message.type === 'image'" :src="message.url" class="message-image"
@@ -84,23 +85,23 @@
 
 		<view class="composer">
 			<view class="composer-main">
-				<image v-if="isVoiceMode || activePanel === 'phrases'" src="../../static/icon_key.png"
+				<image v-if="isVoiceMode || activePanel === 'phrases'" src="../../../static/icon_key.png"
 					class="phrase-icon" mode="aspectFit" @click="handleKeyboardButton"></image>
 				<button v-else class="phrase-button" @click="togglePanel('phrases')">常用语</button>
 				<input v-if="!isVoiceMode" v-model.trim="draft" class="message-input" :focus="inputFocused"
 					confirm-type="send" cursor-spacing="18" maxlength="500" placeholder="输入消息" @focus="handleInputFocus"
 					@confirm="sendMessage" />
-				<image v-if="!isVoiceMode" src="../../static/icon_audio_btn.png" class="round-button" mode="aspectFit"
+				<image v-if="!isVoiceMode" src="../../../static/icon_audio_btn.png" class="round-button" mode="aspectFit"
 					@click="enterVoiceMode"></image>
 				<button v-else class="voice-button" @touchstart.stop.prevent="startVoiceRecording"
 					@touchmove.stop.prevent="updateVoiceRecordingGesture" @touchend.stop.prevent="finishVoiceRecording"
 					@touchcancel.stop.prevent="cancelVoiceRecording">按住 说话</button>
-				<image src="../../static/icon_emoji.png" class="round-button" @click="togglePanel('emoji')"></image>
+				<image src="../../../static/icon_emoji.png" class="round-button" @click="togglePanel('emoji')"></image>
 				<button v-if="!isVoiceMode && draft" class="send-button" :disabled="isSendingMessage"
 					@click="sendMessage">
 					{{ isSendingMessage ? '发送中' : '发送' }}
 				</button>
-				<image v-else src="../../static/icon_add.png" class="round-button" @click="togglePanel('more')"></image>
+				<image v-else src="../../../static/icon_add.png" class="round-button" @click="togglePanel('more')"></image>
 			</view>
 
 			<view v-if="activePanel" class="extension-panel"
@@ -117,9 +118,9 @@
 							@click="usePhrase(phrase.message)">
 							<text class="phrase-message">{{ phrase.message }}</text>
 							<view v-if="isEditingCommonPhrases" class="phrase-item-actions">
-								<image src="../../static/icon_edit.png" class="phrase-item-action-icon" mode="aspectFit"
+								<image src="../../../static/icon_edit.png" class="phrase-item-action-icon" mode="aspectFit"
 									@click.stop="handleCommonPhraseAction('edit', phrase)"></image>
-								<image src="../../static/icon_close.png" class="phrase-item-action-icon"
+								<image src="../../../static/icon_close.png" class="phrase-item-action-icon"
 									:class="{ 'phrase-item-action-icon--disabled': deletingCommonPhraseId === phrase.id }"
 									mode="aspectFit" @click.stop="handleCommonPhraseAction('delete', phrase)"></image>
 							</view>
@@ -127,11 +128,11 @@
 					</scroll-view>
 					<view class="phrase-actions">
 						<view class="phrase-add" @click="openQuickReplyModal">
-							<image src="../../static/icon_common_add.png" class="phrase-add-icon" mode="aspectFit">
+							<image src="../../../static/icon_common_add.png" class="phrase-add-icon" mode="aspectFit">
 							</image>
 							<text>新增</text>
 						</view>
-						<image src="../../static/icon_setting.png" class="phrase-setting-icon" mode="aspectFit"
+						<image src="../../../static/icon_setting.png" class="phrase-setting-icon" mode="aspectFit"
 							@click="toggleCommonPhraseEditing"></image>
 					</view>
 				</view>
@@ -151,26 +152,32 @@
 			</view>
 		</view>
 
-		<!-- 录音时遮罩整个聊天页，手指移动到左右区域即可切换取消/转文字意图。 -->
-		<view v-if="isRecording" class="voice-record-mask" @touchmove.stop.prevent="updateVoiceRecordingGesture"
-			@touchend.stop.prevent="finishVoiceRecording" @touchcancel.stop.prevent="cancelVoiceRecording">
-			<view class="voice-record-card">
-				<view class="voice-wave" :class="{ 'voice-wave--warning': recordingCountdown > 0 }">
-					<text v-for="bar in voiceWaveBars" :key="bar" class="voice-wave-bar"
-						:style="{ animationDelay: `${(bar % 7) * -0.09}s` }"></text>
+		<!-- 录音时遮罩整个聊天页，顶部左右区域切换取消/转文字，底部热区松开发送语音。 -->
+		<transition name="voice-record">
+			<view v-if="isRecording || isTranscribingVoice" class="voice-record-mask"
+				:class="{ 'voice-record-mask--transcribing': isTranscribingVoice }"
+				@touchmove.stop.prevent="updateVoiceRecordingGesture"
+				@touchend.stop.prevent="finishVoiceRecording" @touchcancel.stop.prevent="cancelVoiceRecording">
+				<view class="voice-record-send-zone"
+					:class="{ 'voice-record-send-zone--active': recordingGesture === 'send' && !isTranscribingVoice }"></view>
+				<view class="voice-record-card">
+					<view class="voice-wave" :class="{ 'voice-wave--warning': recordingCountdown > 0 }">
+						<text v-for="bar in voiceWaveBars" :key="bar" class="voice-wave-bar"
+							:style="{ animationDelay: `${(bar % 7) * -0.09}s` }"></text>
+					</view>
+					<text class="voice-record-status">{{ recordingStatusText }}</text>
+					<text v-if="recordingCountdown > 0" class="voice-record-countdown">还剩 {{ recordingCountdown }} 秒</text>
 				</view>
-				<text class="voice-record-status">{{ recordingStatusText }}</text>
-				<text v-if="recordingCountdown > 0" class="voice-record-countdown">还剩 {{ recordingCountdown }} 秒</text>
+				<view class="voice-record-actions">
+					<view class="voice-record-action" :class="{ 'voice-record-action--active': recordingGesture === 'cancel' }">
+						<text>取消</text>
+					</view>
+					<view class="voice-record-action" :class="{ 'voice-record-action--active': recordingGesture === 'transcribe' }">
+						<text>滑到这里 转文字</text>
+					</view>
+				</view>
 			</view>
-			<view class="voice-record-actions">
-				<view class="voice-record-action" :class="{ 'voice-record-action--active': recordingGesture === 'cancel' }">
-					<text>取消</text>
-				</view>
-				<view class="voice-record-action" :class="{ 'voice-record-action--active': recordingGesture === 'transcribe' }">
-					<text>滑到这里 转文字</text>
-				</view>
-			</view>
-		</view>
+		</transition>
 
 		<!-- 转文字结果只保留可编辑文本和两个发送动作，不叠加翻译/表情入口。 -->
 		<view v-if="showVoiceTextEditor" class="voice-text-mask" @click.stop>
@@ -246,7 +253,7 @@
 <script>
 	import {
 		requestApi
-	} from '../../services/request'
+	} from '../../../services/request'
 	import {
 		NIM_EVENT,
 		clearActiveConversationId,
@@ -254,14 +261,14 @@
 		getNimInstance,
 		isNimLoggedIn,
 		setActiveConversationId
-	} from '../../services/nim'
+	} from '../../../services/nim'
 	import {
 		markNimConversationRead
-	} from '../../services/conversation'
+	} from '../../../services/conversation'
 	import {
 		NIM_EMOJIS,
 		parseNimEmojiText
-	} from '../../services/nim-emoji'
+	} from '../../../services/nim-emoji'
 
 	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
 	const CHAT_SAVE_API = 'Chat.Chat.Save'
@@ -284,6 +291,8 @@
 	const MAX_VOICE_DURATION = 60 * 1000
 	const VOICE_COUNTDOWN_DURATION = 10 * 1000
 	const MIN_VOICE_DURATION = 1000
+	const AUDIO_BUBBLE_MIN_WIDTH = 150
+	const AUDIO_BUBBLE_MAX_WIDTH = 470
 	const BLOCKED_USER_SEND_WARNING = '对方在您的黑名单中，无法回复您的消息'
 	const ENTERPRISE_BLOCKED_SEND_CODE = '102426'
 	const ENTERPRISE_BLOCKED_SEND_MESSAGE = '该企业已屏蔽您的消息，暂不能发送消息'
@@ -648,6 +657,7 @@
 				return Math.max(0, Math.ceil(remaining / 1000))
 			},
 			recordingStatusText() {
+				if (this.isTranscribingVoice) return '正在转文字...'
 				if (this.recordingGesture === 'cancel') return '松开 取消'
 				if (this.recordingGesture === 'transcribe') return '松开 转文字'
 				return '松开 发送语音'
@@ -1850,8 +1860,13 @@
 				const height = Number(systemInfo.windowHeight) || 667
 				const x = Number(touch.clientX !== undefined ? touch.clientX : touch.pageX)
 				const y = Number(touch.clientY !== undefined ? touch.clientY : touch.pageY)
-				// 底部保留发送热区；向上滑入操作区后，左侧取消、右侧转文字。
-				if (y <= height - 88) this.recordingGesture = x < width / 2 ? 'cancel' : 'transcribe'
+				// 底部保留与视觉热区一致的发送区域；向上滑入操作区后，左侧取消、右侧转文字。
+				const safeAreaInsets = systemInfo.safeAreaInsets || {}
+				const safeArea = systemInfo.safeArea || {}
+				const safeBottom = Number(safeAreaInsets.bottom) || Math.max(0,
+					height - Number(safeArea.bottom || height))
+				const sendZoneHeight = Math.max(88, Math.round(width * 150 / 750 + safeBottom))
+				if (y <= height - sendZoneHeight) this.recordingGesture = x < width / 2 ? 'cancel' : 'transcribe'
 				else this.recordingGesture = 'send'
 			},
 			async finishVoiceRecording(event, reachedLimit = false, stoppedResult = null) {
@@ -1947,7 +1962,6 @@
 				const voice = this.pendingVoice
 				if (!voice || this.isTranscribingVoice) return
 				this.isTranscribingVoice = true
-				uni.showLoading({ title: '正在转文字...', mask: true })
 				try {
 					const nim = getNimInstance()
 					if (!nim.V2NIMMessageService || typeof nim.V2NIMMessageService.voiceToText !== 'function') {
@@ -1973,7 +1987,6 @@
 					})
 					console.error('[Chat] 云信语音转文字失败', error)
 				} finally {
-					uni.hideLoading()
 					this.isTranscribingVoice = false
 				}
 			},
@@ -2075,30 +2088,96 @@
 				}
 				this.resetRecordingState()
 			},
+			/** 根据语音时长返回气泡宽度，限制在 150~470rpx，避免长语音撑满消息区。 */
+			audioBubbleWidth(message) {
+				const durationSeconds = Math.min(60, Math.max(1,
+					Number(message && message.durationSeconds) || 1))
+				const width = AUDIO_BUBBLE_MIN_WIDTH +
+					(durationSeconds - 1) * (AUDIO_BUBBLE_MAX_WIDTH - AUDIO_BUBBLE_MIN_WIDTH) / 59
+				return `${Math.round(width)}rpx`
+			},
+			normalizeAudioUrl(url) {
+				const source = String(url || '').trim()
+				if (!source) return ''
+				// iOS Safari 会拦截 HTTPS 页面加载 HTTP 音频资源，云信下载地址通常支持 HTTPS。
+				if (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:' &&
+					/^http:\/\//i.test(source)) {
+					return source.replace(/^http:\/\//i, 'https://')
+				}
+				return source
+			},
+			handleAudioPlaybackError(error, message) {
+				if (this.audioPlayingId !== (message && message.id)) return
+				const source = String(message && message.url || '')
+				const isUnsupportedFormat = /\.(amr|webm|ogg)(?:[?#]|$)/i.test(source)
+				this.destroyAudioPlayer()
+				uni.showToast({
+					title: isUnsupportedFormat ? '当前浏览器不支持该语音格式' : '语音播放失败',
+					icon: 'none'
+				})
+				console.error('[Chat] 播放语音失败', error, source)
+			},
+			playH5AudioMessage(message, source) {
+				if (!source || typeof window === 'undefined' || typeof window.Audio !== 'function') return false
+				const player = new window.Audio()
+				player.preload = 'auto'
+				player.playsInline = true
+				player.setAttribute('playsinline', 'playsinline')
+				player.setAttribute('webkit-playsinline', 'webkit-playsinline')
+				player.src = source
+				this._audioPlayer = player
+				this.audioPlayingId = message.id
+				player.onended = () => this.destroyAudioPlayer()
+				player.onerror = error => this.handleAudioPlaybackError(error, message)
+				try {
+					const playPromise = player.play()
+					if (playPromise && typeof playPromise.catch === 'function') {
+						playPromise.catch(error => this.handleAudioPlaybackError(error, message))
+					}
+				} catch (error) {
+					this.handleAudioPlaybackError(error, message)
+				}
+				return true
+			},
 			playAudioMessage(message) {
-				if (!message || !message.url || typeof uni.createInnerAudioContext !== 'function') return
+				if (!message || !message.url) return
 				if (this.audioPlayingId === message.id) {
 					this.destroyAudioPlayer()
 					return
 				}
 				this.destroyAudioPlayer()
+				const source = this.normalizeAudioUrl(message.url)
+				let isH5 = false
+				// #ifdef H5
+				isH5 = true
+				// #endif
+				if (isH5 && this.playH5AudioMessage(message, source)) return
+				if (typeof uni.createInnerAudioContext !== 'function') return
 				const player = uni.createInnerAudioContext()
 				this._audioPlayer = player
 				this.audioPlayingId = message.id
-				player.src = message.url
+				player.src = source
 				player.onEnded(() => this.destroyAudioPlayer())
 				player.onError(error => {
-					this.destroyAudioPlayer()
-					uni.showToast({ title: '语音播放失败', icon: 'none' })
-					console.error('[Chat] 播放语音失败', error)
+					this.handleAudioPlaybackError(error, message)
 				})
 				player.play()
 			},
 			destroyAudioPlayer() {
 				if (this._audioPlayer) {
 					try {
-						this._audioPlayer.stop()
-						this._audioPlayer.destroy()
+						// HTMLAudioElement 与 uni InnerAudioContext 的释放接口不同。
+						if ('onended' in this._audioPlayer) this._audioPlayer.onended = null
+						if ('onerror' in this._audioPlayer) this._audioPlayer.onerror = null
+						if (typeof this._audioPlayer.pause === 'function') this._audioPlayer.pause()
+						if (typeof this._audioPlayer.stop === 'function') this._audioPlayer.stop()
+						if (typeof this._audioPlayer.destroy === 'function') this._audioPlayer.destroy()
+						if (typeof this._audioPlayer.removeAttribute === 'function' &&
+							typeof this._audioPlayer.load === 'function' &&
+							typeof this._audioPlayer.destroy !== 'function') {
+							this._audioPlayer.removeAttribute('src')
+							this._audioPlayer.load()
+						}
 					} catch (error) {
 						console.warn('[Chat] 释放语音播放器失败', error)
 					}
@@ -3168,6 +3247,80 @@
 		left: 0;
 		z-index: 120;
 		background: rgba(0, 0, 0, 0.72);
+		overflow: hidden;
+	}
+
+	.voice-record-mask--transcribing {
+		.voice-record-actions {
+			opacity: 0.72;
+		}
+	}
+
+	.voice-record-enter-active,
+	.voice-record-leave-active {
+		transition: opacity 0.28s ease;
+	}
+
+	.voice-record-enter,
+	.voice-record-enter-from,
+	.voice-record-leave-to {
+		opacity: 0;
+	}
+
+	.voice-record-enter-active .voice-record-send-zone,
+	.voice-record-leave-active .voice-record-send-zone {
+		transition: opacity 0.2s ease, transform 0.28s ease;
+	}
+
+	.voice-record-enter .voice-record-send-zone,
+	.voice-record-enter-from .voice-record-send-zone,
+	.voice-record-leave-to .voice-record-send-zone {
+		opacity: 0;
+		transform: translateY(100%);
+	}
+
+	.voice-record-enter-active .voice-record-card,
+	.voice-record-leave-active .voice-record-card {
+		transition: opacity 0.22s ease, transform 0.26s cubic-bezier(0.22, 0.8, 0.32, 1);
+	}
+
+	.voice-record-enter .voice-record-card,
+	.voice-record-enter-from .voice-record-card,
+	.voice-record-leave-to .voice-record-card {
+		opacity: 0;
+		transform: translate(-50%, calc(-50% + 24rpx)) scale(0.88);
+	}
+
+	.voice-record-enter-active .voice-record-actions,
+	.voice-record-leave-active .voice-record-actions {
+		transition: opacity 0.2s ease, transform 0.24s ease;
+	}
+
+	.voice-record-enter .voice-record-actions,
+	.voice-record-enter-from .voice-record-actions,
+	.voice-record-leave-to .voice-record-actions {
+		opacity: 0;
+		transform: translateY(28rpx);
+	}
+
+	.voice-record-send-zone {
+		position: absolute;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		box-sizing: border-box;
+		height: calc(150rpx + env(safe-area-inset-bottom));
+		border-radius: 50% 50% 0 0 / 22% 22% 0 0;
+		background: rgba(255, 255, 255, 0.28);
+		box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, 0.32);
+		backdrop-filter: blur(18px);
+		-webkit-backdrop-filter: blur(18px);
+		pointer-events: none;
+		transition: background 0.12s ease;
+
+		&.voice-record-send-zone--active {
+			background: rgba(255, 255, 255, 0.48);
+		}
 	}
 
 	.voice-record-card {
@@ -3240,7 +3393,7 @@
 	.voice-record-actions {
 		position: absolute;
 		right: 34rpx;
-		bottom: calc(150rpx + env(safe-area-inset-bottom));
+		bottom: calc(190rpx + env(safe-area-inset-bottom));
 		left: 34rpx;
 		display: flex;
 		align-items: center;
@@ -3263,8 +3416,12 @@
 		transition: background 0.12s ease, transform 0.12s ease;
 
 		&.voice-record-action--active {
-			color: #17370c;
-			background: #91ed61;
+			color: #ffffff;
+			background: rgba(255, 255, 255, 0.38);
+			border-color: rgba(255, 255, 255, 0.44);
+			box-shadow: 0 8rpx 24rpx rgba(0, 0, 0, 0.12);
+			backdrop-filter: blur(18px);
+			-webkit-backdrop-filter: blur(18px);
 			transform: translateY(-10rpx);
 		}
 	}
