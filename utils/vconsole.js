@@ -11,16 +11,16 @@ export function initVConsole() {
 	// #endif
 
 	// #ifdef H5
-	if (typeof window === 'undefined') return null
+	// if (typeof window === 'undefined') return null
 
-	const nodeEnv = typeof process !== 'undefined' && process.env
-		? process.env.NODE_ENV
-		: ''
-	const appEnv = typeof process !== 'undefined' && process.env
-		? process.env.VUE_APP_ENV
-		: ''
-	const isTestEnvironment = appEnv === 'test' || nodeEnv === 'development'
-	if (!isTestEnvironment || window.__vconsole__) return window.__vconsole__ || null
+	// const nodeEnv = typeof process !== 'undefined' && process.env
+	// 	? process.env.NODE_ENV
+	// 	: ''
+	// const appEnv = typeof process !== 'undefined' && process.env
+	// 	? process.env.VUE_APP_ENV
+	// 	: ''
+	// const isTestEnvironment = appEnv === 'test' || nodeEnv === 'development'
+	// if (!isTestEnvironment || window.__vconsole__) return window.__vconsole__ || null
 
 	// 使用 require 延迟加载，确保非 H5 端和非测试环境不会执行调试库。
 	const VConsoleModule = require('vconsole')

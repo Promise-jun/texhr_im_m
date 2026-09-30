@@ -19,8 +19,20 @@
 		</view>
 
 		<view class="conversation-list">
-			<view v-for="conversation in visibleConversations" :key="conversation.id" class="conversation-item"
-				:class="{ 'is-stick-top': conversation.stickTop }" @click="openConversation(conversation)">
+			<view v-for="conversation in visibleConversations" :key="conversation.id" class="conversation-swipe-item"
+				@touchstart="handleSwipeStart($event, conversation)" @touchmove="handleSwipeMove"
+				@touchend="handleSwipeEnd($event, conversation)" @touchcancel="handleSwipeCancel">
+				<view v-if="!conversation.isHistory" class="conversation-actions">
+					<view class="conversation-action stick-action" @click.stop="toggleConversationStickTop(conversation)">
+						<text>{{ conversation.stickTop ? '取消\n置顶' : '置顶' }}</text>
+					</view>
+					<view class="conversation-action delete-action" @click.stop="confirmDeleteConversation(conversation)">
+						<text>删除</text>
+					</view>
+				</view>
+			<view class="conversation-item" :class="{ 'is-stick-top': conversation.stickTop }"
+				:style="getConversationItemStyle(conversation)" @click="openConversation(conversation)">
+				<image v-if="conversation.stickTop" src="/static/icon_top.png" class="top-icon" mode="aspectFit"></image>
 				<view class="avatar-wrap">
 					<image :src="conversation.avatar" class="avatar" mode="aspectFill"></image>
 					<text v-if="conversation.unreadCount > 0 || conversation.hasNewMessage" class="unread-badge"
@@ -37,6 +49,7 @@
 						<text class="message">{{ conversation.message }}</text>
 					</view>
 				</view>
+			</view>
 			</view>
 
 			<view v-if="visibleIsLoading && !visibleConversations.length" class="list-state">
@@ -57,6 +70,7 @@
 	import {
 		NIM_EVENT,
 		getActiveConversationId,
+		getNimInstance,
 		getNimLoginError,
 		isNimLoggedIn
 	} from '../../../services/nim'
@@ -69,6 +83,21 @@
 	import {
 		requestApi
 	} from '../../../services/request'
+
+	const CHAT_SAVE_API = 'Chat.Chat.Save'
+	const CHAT_DELETE_API = 'Chat.Chat.Delete'
+	const CHAT_GET_SINGLE_API = 'Chat.Chat.GetSingleChat'
+
+	function parseResponseData(data, errorMessage = '接口返回的数据格式不正确') {
+		if (typeof data !== 'string') return data || {}
+		if (!data.trim()) return {}
+
+		try {
+			return JSON.parse(data) || {}
+		} catch (error) {
+			throw new Error(errorMessage)
+		}
+	}
 
 	export default {
 		data() {
@@ -90,6 +119,12 @@
 				loadError: '',
 				historyLoadError: '',
 				currentTime: Date.now(),
+				swipeConversationId: '',
+				swipeOffset: 0,
+				swipeTransitionEnabled: true,
+				updatingPinConversationId: '',
+				deletingConversationId: '',
+				openingConversationId: '',
 				// 新消息事件是页面级兜底状态，列表项上的 hasNewMessage 会进一步定位到具体会话。
 				hasNewMessage: false
 			}
@@ -131,6 +166,278 @@
 			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
 		},
 		methods: {
+			getTouchPoint(event) {
+				const touch = event && ((event.touches && event.touches[0]) ||
+					(event.changedTouches && event.changedTouches[0]))
+				if (!touch) return null
+				return {
+					x: touch.clientX !== undefined ? touch.clientX : touch.pageX,
+					y: touch.clientY !== undefined ? touch.clientY : touch.pageY
+				}
+			},
+			getSwipeActionWidth() {
+				if (!this._swipeActionWidth) {
+					this._swipeActionWidth = typeof uni !== 'undefined' && typeof uni.upx2px === 'function' ?
+						uni.upx2px(160) : 160
+				}
+				return this._swipeActionWidth
+			},
+			getConversationItemStyle(conversation) {
+				const offset = this.swipeConversationId === conversation.id ? this.swipeOffset : 0
+				return {
+					transform: `translate3d(${offset}px, 0, 0)`,
+					transition: this.swipeTransitionEnabled ? 'transform 180ms ease-out' : 'none'
+				}
+			},
+			handleSwipeStart(event, conversation) {
+				const touch = this.getTouchPoint(event)
+				if (!touch) return
+				if (conversation.isHistory) {
+					this.closeSwipedConversation()
+					return
+				}
+				if (this.swipeConversationId && this.swipeConversationId !== conversation.id) {
+					this.closeSwipedConversation()
+				}
+
+				this.swipeTransitionEnabled = false
+				this._swipeTouch = {
+					conversationId: conversation.id,
+					startX: touch.x,
+					startY: touch.y,
+					startOffset: this.swipeConversationId === conversation.id ? this.swipeOffset : 0,
+					isHorizontal: false
+				}
+			},
+			handleSwipeMove(event) {
+				const gesture = this._swipeTouch
+				const touch = this.getTouchPoint(event)
+				if (!gesture || !touch) return
+
+				const deltaX = touch.x - gesture.startX
+				const deltaY = touch.y - gesture.startY
+				if (!gesture.isHorizontal) {
+					if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 8) {
+						this._swipeTouch = null
+						this.closeSwipedConversation()
+						return
+					}
+					if (Math.abs(deltaX) < 8) return
+					gesture.isHorizontal = true
+				}
+
+				this.swipeConversationId = gesture.conversationId
+				this.swipeTransitionEnabled = false
+				const maxOffset = this.getSwipeActionWidth()
+				this.swipeOffset = Math.max(-maxOffset, Math.min(0, gesture.startOffset + deltaX))
+			},
+			handleSwipeEnd(event, conversation) {
+				const gesture = this._swipeTouch
+				if (!gesture || gesture.conversationId !== conversation.id) return
+				this._swipeTouch = null
+				if (!gesture.isHorizontal) {
+					this.swipeTransitionEnabled = true
+					return
+				}
+
+				const shouldOpen = this.swipeOffset <= -this.getSwipeActionWidth() / 2
+				this.swipeTransitionEnabled = true
+				this.swipeOffset = shouldOpen ? -this.getSwipeActionWidth() : 0
+				this._ignoreConversationClick = true
+				setTimeout(() => {
+					this._ignoreConversationClick = false
+				}, 220)
+			},
+			handleSwipeCancel() {
+				this._swipeTouch = null
+				this.closeSwipedConversation()
+			},
+			closeSwipedConversation() {
+				this.swipeTransitionEnabled = true
+				this.swipeConversationId = ''
+				this.swipeOffset = 0
+			},
+			async toggleConversationStickTop(conversation) {
+				if (!conversation || conversation.isHistory || !conversation.id || this.updatingPinConversationId ||
+					this.deletingConversationId) return
+				if (!isNimLoggedIn()) {
+					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					return
+				}
+
+				const loginService = getNimInstance().V2NIMLoginService
+				const personAccId = loginService && typeof loginService.getLoginUser === 'function' ?
+					String(loginService.getLoginUser() || '').trim() : ''
+				const enterpriseAccId = conversation.targetId ? String(conversation.targetId).trim() : ''
+				if (!personAccId || !enterpriseAccId) {
+					uni.showToast({ title: '未获取到会话账号信息', icon: 'none' })
+					return
+				}
+
+				const shouldStickTop = !conversation.stickTop
+				let businessUpdated = false
+				let toastTitle = ''
+				this.updatingPinConversationId = conversation.id
+				this.closeSwipedConversation()
+				uni.showLoading({
+					title: shouldStickTop ? '置顶中' : '取消中',
+					mask: true
+				})
+				try {
+					const response = await requestApi({
+						Name: CHAT_SAVE_API,
+						Content: {
+							EnterpriseAccId: enterpriseAccId,
+							PersonAccId: personAccId,
+							IsTop: shouldStickTop
+						}
+					})
+					const responseCode = response && response.Code !== undefined ? Number(response.Code) : NaN
+					if (!response || responseCode !== 0) {
+						if (responseCode === 4400002) throw new Error('置顶数量已达上限')
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`更新置顶状态失败，业务错误码：${code}`)
+					}
+
+					const data = parseResponseData(response.Data, '保存会话接口返回的数据格式不正确')
+					const dataCode = data.Code !== undefined ? Number(data.Code) : 0
+					if (dataCode !== 0) {
+						if (dataCode === 4400002) throw new Error('置顶数量已达上限')
+						throw new Error(`更新置顶状态失败，数据错误码：${data.Code}`)
+					}
+
+					// 业务接口保存成功后同步网易云本地会话，保持与 chat.vue 一致。
+					businessUpdated = true
+					this.rawConversations = this.rawConversations.map(item => item.conversationId === conversation.id ?
+						{ ...item, stickTop: shouldStickTop } : item)
+					this.currentTime = Date.now()
+
+					const conversationService = getNimInstance().V2NIMLocalConversationService
+					if (!conversationService || typeof conversationService.stickTopConversation !== 'function') {
+						throw new Error('当前网易云信 SDK 不支持会话置顶')
+					}
+					await conversationService.stickTopConversation(conversation.id, shouldStickTop)
+					toastTitle = shouldStickTop ? '会话已置顶' : '已取消置顶'
+				} catch (error) {
+					toastTitle = businessUpdated ?
+						'状态已保存，会话列表同步失败' :
+						error && error.message ? error.message : '更新置顶状态失败'
+					console.error('[NIM] 更新会话置顶状态失败', error)
+				} finally {
+					uni.hideLoading()
+					this.updatingPinConversationId = ''
+				}
+
+				if (toastTitle) {
+					uni.showToast({
+						title: toastTitle,
+						icon: 'none'
+					})
+				}
+			},
+			confirmDeleteConversation(conversation) {
+				if (!conversation || conversation.isHistory || !conversation.id || this.deletingConversationId ||
+					this.updatingPinConversationId) return
+				this.closeSwipedConversation()
+				uni.showModal({
+					title: '提示',
+					content: '确认删除该条会话所有聊天记录吗？',
+					confirmText: '确认删除',
+					confirmColor: '#ff5a00',
+					success: result => {
+						if (result.confirm) this.deleteConversation(conversation)
+					}
+				})
+			},
+			async deleteConversation(conversation) {
+				if (!conversation || conversation.isHistory || !conversation.id || this.deletingConversationId) return
+				if (!isNimLoggedIn()) {
+					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					return
+				}
+
+				const nim = getNimInstance()
+				const loginService = nim.V2NIMLoginService
+				const personAccId = loginService && typeof loginService.getLoginUser === 'function' ?
+					String(loginService.getLoginUser() || '').trim() : ''
+				const enterpriseAccId = conversation.targetId ? String(conversation.targetId).trim() : ''
+				if (!personAccId || !enterpriseAccId) {
+					uni.showToast({ title: '未获取到会话账号信息', icon: 'none' })
+					return
+				}
+
+				const conversationService = nim.V2NIMLocalConversationService
+				const messageService = nim.V2NIMMessageService
+				if (!conversationService || typeof conversationService.deleteConversation !== 'function') {
+					uni.showToast({ title: '当前聊天服务不支持删除会话', icon: 'none' })
+					return
+				}
+				if (!messageService || typeof messageService.clearHistoryMessage !== 'function') {
+					uni.showToast({ title: '当前聊天服务不支持清空历史消息', icon: 'none' })
+					return
+				}
+				if (conversation.stickTop && typeof conversationService.stickTopConversation !== 'function') {
+					uni.showToast({ title: '当前聊天服务不支持取消置顶', icon: 'none' })
+					return
+				}
+
+				this.closeSwipedConversation()
+				this.deletingConversationId = conversation.id
+				let businessDeleted = false
+				let historyCleared = false
+				let toastTitle = ''
+				uni.showLoading({ title: '删除中', mask: true })
+				try {
+					const response = await requestApi({
+						Name: CHAT_DELETE_API,
+						Content: {
+							EnterpriseAccId: enterpriseAccId,
+							PersonAccId: personAccId
+						}
+					})
+					const responseCode = response && response.Code !== undefined ? Number(response.Code) : NaN
+					if (!response || responseCode !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`删除会话失败，业务错误码：${code}`)
+					}
+
+					const data = parseResponseData(response.Data, '删除会话接口返回的数据格式不正确')
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error(`删除会话失败，数据错误码：${data.Code}`)
+					}
+					businessDeleted = true
+
+					// 网易云删除置顶会话前先取消置顶，再清空 p2p 会话历史消息。
+					if (conversation.stickTop) {
+						await conversationService.stickTopConversation(conversation.id, false)
+						this.rawConversations = this.rawConversations.map(item => item.conversationId === conversation.id ?
+							{ ...item, stickTop: false } : item)
+					}
+					await messageService.clearHistoryMessage({ conversationId: conversation.id })
+					historyCleared = true
+					await conversationService.deleteConversation(conversation.id, true)
+					if (this._newConversationIds) this._newConversationIds.delete(String(conversation.id))
+					this.rawConversations = this.rawConversations.filter(item => item.conversationId !== conversation.id)
+					this.refreshGlobalNewMessageIndicator()
+					toastTitle = '会话已删除'
+				} catch (error) {
+					toastTitle = !businessDeleted ?
+						(error && error.message ? error.message : '删除会话失败') :
+						(historyCleared ? '聊天记录已删除，网易云会话同步失败' :
+							'业务会话已删除，网易云历史消息清理失败')
+					console.error('[NIM] 删除会话失败', error)
+				} finally {
+					uni.hideLoading()
+					this.deletingConversationId = ''
+				}
+
+				if (toastTitle) {
+					uni.showToast({
+						title: toastTitle,
+						icon: 'none'
+					})
+				}
+			},
 			bindConversationEvents() {
 				// SDK 首次同步、登录完成以及增删改都会驱动列表更新。
 				uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
@@ -337,18 +644,80 @@
 				}
 			},
 
-			openConversation(conversation) {
-				uni.navigateTo({
-					url: `/pages/chat/chat?id=${encodeURIComponent(conversation.id)}&name=${encodeURIComponent(conversation.name)}`,
-					success: () => {
-						this.clearNewMessageIndicator(conversation && conversation.id)
-						// 用户已进入会话，清除未读数；SDK 变更事件会同步刷新列表红点。
-						if (conversation.isHistory) return
-						markNimConversationRead(conversation.id).catch(error => {
-							console.warn('[NIM] 标记会话已读失败', error)
-						})
+			async openConversation(conversation) {
+				if (this._ignoreConversationClick) return
+				if (this.swipeConversationId) {
+					this.closeSwipedConversation()
+					return
+				}
+				if (!conversation || !conversation.id || this.openingConversationId) return
+				if (!isNimLoggedIn()) {
+					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					return
+				}
+
+				const nim = getNimInstance()
+				const loginService = nim.V2NIMLoginService
+				const personAccId = loginService && typeof loginService.getLoginUser === 'function' ?
+					String(loginService.getLoginUser() || '').trim() : ''
+				const enterpriseAccId = conversation.targetId ? String(conversation.targetId).trim() : ''
+				if (!personAccId || !enterpriseAccId) {
+					uni.showToast({ title: '未获取到会话账号信息', icon: 'none' })
+					return
+				}
+
+				this.openingConversationId = conversation.id
+				uni.showLoading({ title: '加载中', mask: true })
+				try {
+					const response = await requestApi({
+						Name: CHAT_GET_SINGLE_API,
+						Content: {
+							PersonAccId: personAccId,
+							EnterpriseAccId: enterpriseAccId
+						}
+					})
+					const responseCode = response && response.Code !== undefined ? Number(response.Code) : NaN
+					if (!response || responseCode !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`获取会话信息失败，业务错误码：${code}`)
 					}
-				})
+
+					const data = parseResponseData(response.Data, '获取会话信息接口返回的数据格式不正确')
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error(`获取会话信息失败，数据错误码：${data.Code}`)
+					}
+					const jobValue = data.JobId !== undefined ? data.JobId : response.JobId
+					const resumeValue = data.ResumeId !== undefined ? data.ResumeId : response.ResumeId
+					const jobId = jobValue !== undefined && jobValue !== null ? String(jobValue).trim() : ''
+					const resumeId = resumeValue !== undefined && resumeValue !== null ? String(resumeValue).trim() : ''
+					if (!jobId || !resumeId) throw new Error('获取会话信息失败：未返回 JobId 或 ResumeId')
+
+					const url = `/pages/person/m/chat?jobId=${encodeURIComponent(jobId)}&resumeId=${encodeURIComponent(resumeId)}`
+					uni.navigateTo({
+						url,
+						success: () => {
+							this.clearNewMessageIndicator(conversation.id)
+							// 用户已进入会话，清除未读数；SDK 变更事件会同步刷新列表红点。
+							if (conversation.isHistory) return
+							markNimConversationRead(conversation.id).catch(error => {
+								console.warn('[NIM] 标记会话已读失败', error)
+							})
+						},
+						fail: error => {
+							console.error('[NIM] 打开聊天页面失败', error)
+							uni.showToast({ title: '打开聊天页面失败', icon: 'none' })
+						}
+					})
+				} catch (error) {
+					console.error('[NIM] 获取会话详情失败', error)
+					uni.showToast({
+						title: error && error.message ? error.message : '获取会话信息失败',
+						icon: 'none'
+					})
+				} finally {
+					uni.hideLoading()
+					this.openingConversationId = ''
+				}
 			},
 			clearNewMessageIndicator(conversationId) {
 				if (!conversationId) return
@@ -482,13 +851,62 @@
 			background: #ffffff;
 			padding: 20rpx 0;
 
+			.conversation-swipe-item {
+				position: relative;
+				overflow: hidden;
+				width: 100%;
+			}
+
+			.conversation-actions {
+				position: absolute;
+				top: 0;
+				right: 0;
+				bottom: 0;
+				display: flex;
+				width: 160rpx;
+				height: 100%;
+
+				.conversation-action {
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					width: 80rpx;
+					font-size: 24rpx;
+					line-height: 32rpx;
+					text-align: center;
+					color: #ffffff;
+					white-space: pre-line;
+
+					&.stick-action {
+						background: #aebbc4;
+					}
+
+					&.delete-action {
+						background: #ff5a00;
+					}
+				}
+			}
+
 			.conversation-item {
+				position: relative;
+				z-index: 1;
 				display: flex;
 				box-sizing: border-box;
+				width: 100%;
 				padding: 28rpx;
+				background: #ffffff;
 
 				&.is-stick-top {
 					background: #f7f7f7;
+				}
+
+				.top-icon {
+					position: absolute;
+					top: 0;
+					right: 0;
+					z-index: 2;
+					width: 30rpx;
+					height: 30rpx;
 				}
 
 				.avatar-wrap {

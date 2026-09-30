@@ -6,6 +6,7 @@ const CONVERSATION_PAGE_SIZE = 100
 const HISTORY_CONVERSATION_MAX_PAGES = 1000
 const HISTORY_REPEAT_PAGE_LIMIT = 2
 const DEFAULT_AVATAR = '/static/default_avatar.png'
+const NIM_USER_PAGE_SIZE = 150
 
 export const NIM_GET_ALL_SESSIONS_API = 'Chat.Chat.GetAllSessions'
 
@@ -30,6 +31,64 @@ const MESSAGE_TYPE_PREVIEW = Object.freeze({
 function toTimestamp(value) {
 	const timestamp = Number(value)
 	return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0
+}
+
+/**
+ * 使用会话目标账号批量获取网易云用户资料，并合并回会话对象。
+ * 本地会话缓存通常只包含会话状态，不一定带有对方的昵称和头像；
+ * 列表页需要把用户资料补齐后再做展示。资料获取失败时不阻塞会话列表。
+ */
+async function enrichConversationsWithUserProfiles(conversationList, nim) {
+	if (!Array.isArray(conversationList) || !conversationList.length) return conversationList
+
+	const userService = nim && nim.V2NIMUserService
+	const getUserList = userService && (
+		typeof userService.getUserListFromCloud === 'function'
+			? userService.getUserListFromCloud.bind(userService)
+			: typeof userService.getUserList === 'function'
+				? userService.getUserList.bind(userService)
+				: null
+	)
+	if (!getUserList) return conversationList
+
+	const accountIdSet = new Set()
+	conversationList.forEach(conversation => {
+		if (!conversation || Number(conversation.type) !== 1) return
+		const targetId = getConversationTargetId(conversation.conversationId)
+		if (targetId) accountIdSet.add(String(targetId))
+	})
+	const accountIds = Array.from(accountIdSet)
+	if (!accountIds.length) return conversationList
+
+	const userMap = new Map()
+	try {
+		for (let start = 0; start < accountIds.length; start += NIM_USER_PAGE_SIZE) {
+			const users = await getUserList(accountIds.slice(start, start + NIM_USER_PAGE_SIZE))
+			;(Array.isArray(users) ? users : []).forEach(user => {
+				if (user && user.accountId !== undefined && user.accountId !== null) {
+					userMap.set(String(user.accountId), user)
+				}
+			})
+		}
+	} catch (error) {
+		console.warn('[NIM] 获取会话用户资料失败，继续使用会话缓存', error)
+		return conversationList
+	}
+
+	return conversationList.map(conversation => {
+		if (!conversation || Number(conversation.type) !== 1) return conversation
+		const targetId = getConversationTargetId(conversation.conversationId)
+		const user = targetId ? userMap.get(String(targetId)) : null
+		if (!user) return conversation
+
+		const name = typeof user.name === 'string' ? user.name.trim() : ''
+		const avatar = typeof user.avatar === 'string' ? user.avatar.trim() : ''
+		return {
+			...conversation,
+			name: name || conversation.name,
+			avatar: avatar || conversation.avatar
+		}
+	})
 }
 
 /** 最近消息时间用于会话排序和时间文案，避免置顶操作改变 updateTime 后扰乱排序。 */
@@ -87,7 +146,7 @@ export async function getAllNimConversations() {
 		offset = nextOffset
 	}
 
-	return Array.from(conversationMap.values())
+	return enrichConversationsWithUserProfiles(Array.from(conversationMap.values()), nim)
 }
 
 function parseResponseData(data) {
@@ -215,7 +274,11 @@ function padNumber(value) {
 	return value < 10 ? `0${value}` : String(value)
 }
 
-/** 按聊天列表惯例显示：今天显示时分、昨天显示“昨天”、七天内显示星期。 */
+function formatConversationClock(date) {
+	return `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}`
+}
+
+/** 按聊天列表惯例显示日期，并始终精确到分钟。 */
 export function formatConversationTime(timestamp, now = Date.now()) {
 	if (!timestamp) return ''
 
@@ -228,18 +291,17 @@ export function formatConversationTime(timestamp, now = Date.now()) {
 	).getTime()
 	const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
 	const calendarDayDiff = Math.round((todayStart - dateStart) / DAY_IN_MS)
+	const clock = formatConversationClock(date)
 
-	if (calendarDayDiff === 0) {
-		return `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}`
-	}
-	if (calendarDayDiff === 1) return '昨天'
+	if (calendarDayDiff === 0) return clock
+	if (calendarDayDiff === 1) return `昨天 ${clock}`
 	if (timestamp >= now - 7 * DAY_IN_MS) {
-		return `周${'日一二三四五六'.charAt(date.getDay())}`
+		return `周${'日一二三四五六'.charAt(date.getDay())} ${clock}`
 	}
 	if (date.getFullYear() === currentDate.getFullYear()) {
-		return `${date.getMonth() + 1}月${date.getDate()}日`
+		return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`
 	}
-	return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`
+	return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${clock}`
 }
 
 export function getLastMessagePreview(lastMessage, conversationType) {

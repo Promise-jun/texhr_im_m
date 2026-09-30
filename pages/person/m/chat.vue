@@ -446,6 +446,37 @@
 		}
 	}
 
+	/**
+	 * 云信语音附件 URL 通常没有文件扩展名，iOS Safari 无法仅凭 URL 判断解码器。
+	 * 优先使用 SDK 返回的 MIME/扩展名，播放时通过 source.type 明确告诉浏览器资源类型。
+	 */
+	function getAudioMimeType(attachment) {
+		const source = attachment && typeof attachment === 'object' ? attachment : {}
+		const declaredType = [source.mimeType, source.contentType, source.mime]
+			.find(value => typeof value === 'string' && /^audio\//i.test(value.trim()))
+		if (declaredType) {
+			const normalized = declaredType.trim().toLowerCase()
+			if (normalized === 'audio/m4a' || normalized === 'audio/x-m4a' || normalized === 'audio/x-mp4') return 'audio/mp4'
+			if (normalized === 'audio/x-wav') return 'audio/wav'
+			return normalized
+		}
+
+		const fileName = String(source.name || source.ext || '').toLowerCase()
+		const extension = (fileName.match(/(?:^|\.)(mp3|mpeg|m4a|mp4|aac|wav|amr|ogg|webm)(?:$|[?#])/) || [])[1]
+		const mimeTypes = {
+			mp3: 'audio/mpeg',
+			mpeg: 'audio/mpeg',
+			m4a: 'audio/mp4',
+			mp4: 'audio/mp4',
+			aac: 'audio/aac',
+			wav: 'audio/wav',
+			amr: 'audio/amr',
+			ogg: 'audio/ogg',
+			webm: 'audio/webm'
+		}
+		return extension ? mimeTypes[extension] || '' : ''
+	}
+
 	function normalizeNimMessage(message) {
 		const messageType = Number(message && message.messageType)
 		const attachment = message && message.attachment ? message.attachment : {}
@@ -491,6 +522,9 @@
 				...base,
 				type: 'audio',
 				url: attachment.url,
+				name: attachment.name || '',
+				ext: attachment.ext || '',
+				mimeType: getAudioMimeType(attachment),
 				duration,
 				durationSeconds: Math.max(1, Math.ceil(duration / 1000)),
 				content: '[语音]'
@@ -645,7 +679,6 @@
 					result.push(message)
 					previousTimestamp = message.timestamp
 				})
-				console.log(666, this.messages)
 				return result
 			},
 			scrollTopStyle() {
@@ -1209,7 +1242,7 @@
 					return
 				}
 				uni.reLaunch({
-					url: '/pages/index/index'
+					url: '/pages/person/m/list'
 				})
 			},
 			handleAction(action) {
@@ -2097,19 +2130,97 @@
 				return `${Math.round(width)}rpx`
 			},
 			normalizeAudioUrl(url) {
-				const source = String(url || '').trim()
+				let source = String(url || '').trim()
 				if (!source) return ''
 				// iOS Safari 会拦截 HTTPS 页面加载 HTTP 音频资源，云信下载地址通常支持 HTTPS。
 				if (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:' &&
 					/^http:\/\//i.test(source)) {
-					return source.replace(/^http:\/\//i, 'https://')
+					source = source.replace(/^http:\/\//i, 'https://')
+				}
+				// 统一解析并编码 URL，避免历史消息中的空格/非法字符触发 WebKit PARSE_ERROR。
+				if (typeof window !== 'undefined' && window.URL && window.location) {
+					try {
+						return new window.URL(source, window.location.href).toString()
+					} catch (error) {
+						// 非标准临时路径交给底层播放器处理。
+					}
 				}
 				return source
 			},
-			handleAudioPlaybackError(error, message) {
+			getAudioPlaybackMimeType(message) {
+				if (message && message.mimeType) return message.mimeType
+				const extension = String(message && (message.ext || message.name) || '')
+					.toLowerCase()
+					.match(/(?:^|\.)(mp3|mpeg|m4a|mp4|aac|wav|amr|ogg|webm)(?:$|[?#])/)
+				return getAudioMimeType({ name: extension && extension[0] })
+			},
+			isIOSBrowser() {
+				if (typeof navigator === 'undefined') return false
+				return /iPad|iPhone|iPod/i.test(navigator.userAgent || '') ||
+					(navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+			},
+			isAudioParseError(error) {
+				const name = String(error && error.name || '')
+				const message = String(error && (error.message || error.errMsg || error.code) || '')
+				return /PARSE_ERROR|NotSupportedError|MEDIA_ERR_SRC_NOT_SUPPORTED|decode/i.test(`${name} ${message}`) ||
+					Number(error && error.code) === 3 || Number(error && error.code) === 4
+			},
+			async retryH5AudioFromBlob(message, source) {
+				if (!this.isIOSBrowser() || typeof fetch !== 'function' ||
+					typeof window === 'undefined' || !window.URL || typeof window.URL.createObjectURL !== 'function') {
+					return false
+				}
+				const response = await fetch(source, { mode: 'cors', credentials: 'omit' })
+				if (!response.ok) throw new Error(`音频资源请求失败（${response.status}）`)
+				const blob = await response.blob()
+				if (!blob || !blob.size) throw new Error('音频资源为空')
+				// 响应头给出真实 audio MIME 时优先采用它；部分云信历史附件只返回 application/octet-stream。
+				const responseMimeType = /^audio\//i.test(blob.type || '') ? blob.type.toLowerCase() : ''
+				const mimeType = responseMimeType || this.getAudioPlaybackMimeType(message) || 'audio/mp4'
+				const playableBlob = blob.type === mimeType ? blob : new Blob([blob], { type: mimeType })
+				const objectUrl = window.URL.createObjectURL(playableBlob)
+				const player = this.createH5AudioElement(objectUrl, mimeType)
+				if (!player) {
+					window.URL.revokeObjectURL(objectUrl)
+					throw new Error('当前浏览器不支持音频播放')
+				}
+				this._audioObjectUrl = objectUrl
+				this._audioPlayer = player
+				this.audioPlayingId = message.id
+				player.onended = () => this.destroyAudioPlayer()
+				player.onerror = error => this.handleAudioPlaybackError(error || player.error, message, true)
+				if (typeof player.load === 'function') player.load()
+				const playPromise = player.play()
+				if (playPromise && typeof playPromise.then === 'function') await playPromise
+				return true
+			},
+			handleAudioPlaybackError(error, message, isFallbackAttempt = false) {
 				if (this.audioPlayingId !== (message && message.id)) return
 				const source = String(message && message.url || '')
-				const isUnsupportedFormat = /\.(amr|webm|ogg)(?:[?#]|$)/i.test(source)
+				const mimeType = this.getAudioPlaybackMimeType(message)
+				const isUnsupportedFormat = /\.(amr|webm|ogg)(?:[?#]|$)/i.test(source) ||
+					/^(audio\/(?:amr|webm|ogg))$/i.test(mimeType)
+				// 同一个资源可能同时触发 error 事件和 play() rejection，只允许启动一次 Blob 重试。
+				if (!isFallbackAttempt && this._audioBlobFallbackId === message.id) return
+				if (!isFallbackAttempt && this.isAudioParseError(error) && !this._audioBlobFallbackId) {
+					this.destroyAudioPlayer()
+					this._audioBlobFallbackId = message.id
+					// Blob 请求期间保持当前消息为“播放中”，避免重复点击创建多个请求。
+					this.audioPlayingId = message.id
+					this.retryH5AudioFromBlob(message, source)
+						.then(played => {
+							if (!played && this._audioBlobFallbackId === message.id) {
+								this.handleAudioPlaybackError(error, message, true)
+							}
+						})
+						.catch(fallbackError => {
+							if (this._audioBlobFallbackId === message.id) {
+								this.handleAudioPlaybackError(fallbackError, message, true)
+							}
+						})
+					return
+				}
+				this._audioBlobFallbackId = ''
 				this.destroyAudioPlayer()
 				uni.showToast({
 					title: isUnsupportedFormat ? '当前浏览器不支持该语音格式' : '语音播放失败',
@@ -2117,19 +2228,41 @@
 				})
 				console.error('[Chat] 播放语音失败', error, source)
 			},
-			playH5AudioMessage(message, source) {
-				if (!source || typeof window === 'undefined' || typeof window.Audio !== 'function') return false
-				const player = new window.Audio()
+			createH5AudioElement(source, mimeType) {
+				let player
+				if (typeof window === 'undefined') return null
+				if (window.document && typeof window.document.createElement === 'function') {
+					player = window.document.createElement('audio')
+					if (mimeType) {
+						const sourceNode = window.document.createElement('source')
+						sourceNode.src = source
+						sourceNode.type = mimeType
+						player.appendChild(sourceNode)
+					} else {
+						player.src = source
+					}
+				} else if (typeof window.Audio === 'function') {
+					player = new window.Audio(source)
+				}
+				if (!player) return null
 				player.preload = 'auto'
 				player.playsInline = true
 				player.setAttribute('playsinline', 'playsinline')
 				player.setAttribute('webkit-playsinline', 'webkit-playsinline')
-				player.src = source
+				return player
+			},
+			playH5AudioMessage(message, source) {
+				if (!source || typeof window === 'undefined') return false
+				const mimeType = this.getAudioPlaybackMimeType(message)
+				const player = this.createH5AudioElement(source, mimeType)
+				if (!player) return false
 				this._audioPlayer = player
 				this.audioPlayingId = message.id
+				this._audioBlobFallbackId = ''
 				player.onended = () => this.destroyAudioPlayer()
-				player.onerror = error => this.handleAudioPlaybackError(error, message)
+				player.onerror = error => this.handleAudioPlaybackError(error || player.error, message)
 				try {
+					if (typeof player.load === 'function') player.load()
 					const playPromise = player.play()
 					if (playPromise && typeof playPromise.catch === 'function') {
 						playPromise.catch(error => this.handleAudioPlaybackError(error, message))
@@ -2142,6 +2275,7 @@
 			playAudioMessage(message) {
 				if (!message || !message.url) return
 				if (this.audioPlayingId === message.id) {
+					this._audioBlobFallbackId = ''
 					this.destroyAudioPlayer()
 					return
 				}
@@ -2164,6 +2298,11 @@
 				player.play()
 			},
 			destroyAudioPlayer() {
+				if (this._audioObjectUrl && typeof window !== 'undefined' && window.URL &&
+					typeof window.URL.revokeObjectURL === 'function') {
+					window.URL.revokeObjectURL(this._audioObjectUrl)
+				}
+				this._audioObjectUrl = ''
 				if (this._audioPlayer) {
 					try {
 						// HTMLAudioElement 与 uni InnerAudioContext 的释放接口不同。
