@@ -11,7 +11,8 @@ export const API_URL = defaultApiUrl
 export const DEFAULT_API_VERSION = 'V1.0.0'
 
 export const AUTH_COOKIE_KEYS = Object.freeze({
-	PERSONAL: 'persontokeninfotexhr'
+	PERSONAL: 'persontokeninfotexhr',
+	ENTERPRISE: 'enterprisetokeninfotexhr'
 })
 
 const REQUEST_TIMEOUT = 15000
@@ -101,72 +102,101 @@ export function setEncodedCookie(name, encodedValue) {
 	// #endif
 }
 
-function normalizeAuth(personal) {
-	if (!personal || typeof personal !== 'object') return null
+function normalizeAuth(auth, idField) {
+	if (!auth || typeof auth !== 'object') return null
 
-	const hasPersonId = Object.prototype.hasOwnProperty.call(personal, 'personId')
-		|| Object.prototype.hasOwnProperty.call(personal, 'PersonId')
-	const hasToken = Object.prototype.hasOwnProperty.call(personal, 'token')
-		|| Object.prototype.hasOwnProperty.call(personal, 'Token')
-	if (!hasPersonId && !hasToken) return null
+	const cookieIdField = idField.charAt(0).toLowerCase() + idField.slice(1)
+	const hasId = Object.prototype.hasOwnProperty.call(auth, cookieIdField) ||
+		Object.prototype.hasOwnProperty.call(auth, idField)
+	const hasToken = Object.prototype.hasOwnProperty.call(auth, 'token') ||
+		Object.prototype.hasOwnProperty.call(auth, 'Token')
+	if (!hasId && !hasToken) return null
 
-	const personId = hasPersonId
-		? (personal.personId !== undefined ? personal.personId : personal.PersonId)
-		: ''
-	const token = hasToken
-		? (personal.token !== undefined ? personal.token : personal.Token)
-		: ''
+	const id = hasId ?
+		(auth[cookieIdField] !== undefined ? auth[cookieIdField] : auth[idField]) :
+		''
+	const token = hasToken ?
+		(auth.token !== undefined ? auth.token : auth.Token) :
+		''
 
 	return {
-		PersonId: personId === undefined || personId === null ? '' : String(personId),
+		[idField]: id === undefined || id === null ? '' : String(id),
 		Token: typeof token === 'string' ? token : ''
 	}
 }
 
-function parseQueryAuth(value) {
+function parseQueryAuth(value, idField) {
 	const fields = {}
+	const cookieIdField = idField.charAt(0).toLowerCase() + idField.slice(1)
 
 	value.split('&').forEach(item => {
 		const separatorIndex = item.indexOf('=')
 		if (separatorIndex < 0) return
 
 		const key = decodeCookieComponent(item.slice(0, separatorIndex)).trim()
-		if (key !== 'personId' && key !== 'PersonId' && key !== 'token' && key !== 'Token') return
+		if (key !== cookieIdField && key !== idField && key !== 'token' && key !== 'Token') return
 
 		fields[key] = decodeCookieComponent(item.slice(separatorIndex + 1))
 	})
 
-	return normalizeAuth(fields)
+	return normalizeAuth(fields, idField)
 }
 
-function parseAuthCookie(rawCookie) {
+function parseAuthCookie(rawCookie, idField) {
 	const decodedCookie = decodeCookieComponent(rawCookie)
-	const candidates = decodedCookie === rawCookie
-		? [rawCookie]
-		: [rawCookie, decodedCookie]
+	const candidates = decodedCookie === rawCookie ? [rawCookie] : [rawCookie, decodedCookie]
 
 	for (const candidate of candidates) {
 		try {
-			const auth = normalizeAuth(JSON.parse(candidate))
+			const auth = normalizeAuth(JSON.parse(candidate), idField)
 			if (auth) return auth
 		} catch (error) {
 			// 新版 Cookie 是查询串格式，JSON 解析失败后继续按键值对解析。
 		}
 
-		const auth = parseQueryAuth(candidate)
+		const auth = parseQueryAuth(candidate, idField)
 		if (auth) return auth
 	}
 
 	return null
 }
 
-function getAuthFromCookie() {
-	return { PersonId: 210902, Token: '7v3TRX012_HkKNr4aIGF' }
-	
-	const personalCookie = getRawCookie(AUTH_COOKIE_KEYS.PERSONAL)
-	if (!personalCookie) return { PersonId: '', Token: '' }
+function isEnterprisePage() {
+	// #ifdef H5
+	if (typeof window !== 'undefined' && window.location) {
+		return String(window.location.href || '').toLowerCase().includes('ehr')
+	}
+	// #endif
 
-	return parseAuthCookie(personalCookie) || { PersonId: '', Token: '' }
+	return false
+}
+
+function getAuthFromCookie(isEnterprise) {
+	// 获取当前页面url
+	const url = window.location.href;
+	// 判断是否包含 ehr（区分大小写，EHR 匹配不到）
+	if (url.includes('ehr')) {
+		return {
+			EnterpriseId: 197979,
+			Token: '72IVV108lrUFu72XxvM7'
+		}
+	} else {
+		return {
+			PersonId: 210902,
+			Token: '44rYT5eYeBBxxcEu1gnW'
+		}
+	}
+
+	const idField = isEnterprise ? 'EnterpriseId' : 'PersonId'
+	const cookieKey = isEnterprise ? AUTH_COOKIE_KEYS.ENTERPRISE : AUTH_COOKIE_KEYS.PERSONAL
+	const authCookie = getRawCookie(cookieKey)
+	const emptyAuth = {
+		[idField]: '',
+		Token: ''
+	}
+	if (!authCookie) return emptyAuth
+
+	return parseAuthCookie(authCookie, idField) || emptyAuth
 }
 
 function serializeContent(Content) {
@@ -184,7 +214,12 @@ function serializeContent(Content) {
  * 根据 texhr OpenAPI 文档创建完整请求体。
  * 文档要求空值字段也不能省略，因此暂不使用的字段统一传空字符串。
  */
-export function createRequestPayload({ Name, Content = '', Version = DEFAULT_API_VERSION, Ip = '' }) {
+export function createRequestPayload({
+	Name,
+	Content = '',
+	Version = DEFAULT_API_VERSION,
+	Ip = ''
+}) {
 	if (typeof Name !== 'string' || !Name.trim()) {
 		throw new Error('Name 不能为空')
 	}
@@ -192,15 +227,16 @@ export function createRequestPayload({ Name, Content = '', Version = DEFAULT_API
 		throw new Error('Version 不能为空')
 	}
 
-	const auth = getAuthFromCookie()
+	const isEnterprise = isEnterprisePage()
+	const auth = getAuthFromCookie(isEnterprise)
 
 	return {
 		Name: Name.trim(),
 		Version: Version.trim(),
-		EnterpriseId: '',
-		PersonId: auth.PersonId,
+		EnterpriseId: isEnterprise ? auth.EnterpriseId : '',
+		PersonId: isEnterprise ? '' : auth.PersonId,
 		Token: auth.Token,
-		Platform: 1,
+		Platform: isEnterprise ? 2 : 1,
 		Appid: 'M',
 		IdCode: '',
 		Ip,
@@ -218,9 +254,18 @@ export function createRequestPayload({ Name, Content = '', Version = DEFAULT_API
  *   Content: {}
  * })
  */
-export async function requestApi({ Name, Content = '', Version = DEFAULT_API_VERSION }) {
+export async function requestApi({
+	Name,
+	Content = '',
+	Version = DEFAULT_API_VERSION
+}) {
 	// 当前业务不需要客户端 IP，按照接口结构要求保留字段并传空字符串。
-	const data = createRequestPayload({ Name, Content, Version, Ip: '' })
+	const data = createRequestPayload({
+		Name,
+		Content,
+		Version,
+		Ip: ''
+	})
 	const response = await uniRequest({
 		url: requestConfig.apiUrl,
 		method: 'POST',

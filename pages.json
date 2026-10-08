@@ -20,6 +20,17 @@
 					"titleNView": false
 				}
 			}
+		},
+		{
+			"path": "pages/ehr/pc/chat",
+			"style": {
+				"navigationStyle": "custom",
+				"enablePullDownRefresh": false,
+				"backgroundColor": "white",
+				"app-plus": {
+					"titleNView": false
+				}
+			}
 		}
 	],
 	"globalStyle": {
