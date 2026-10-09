@@ -4,7 +4,7 @@
 			<view class="top-bar">
 				<view class="main-tabs">
 					<view v-for="tab in mainTabs" :key="tab.key" class="main-tab"
-						:class="{ 'main-tab--active': activeMainTab === tab.key }" @click="activeMainTab = tab.key">
+						:class="{ 'main-tab--active': activeMainTab === tab.key }" @click="switchMainTab(tab.key)">
 						{{ tab.label }}
 					</view>
 				</view>
@@ -27,27 +27,52 @@
 
 					<view class="conversation-list" :class="{ 'conversation-list--full': activeMainTab === 'history' }">
 						<view v-for="conversation in visibleConversations" :key="conversation.id"
-							class="conversation-item" :class="{ 'conversation-item--selected': selectedId === conversation.id }"
+							class="conversation-item" :class="{ 'conversation-item--selected': selectedId === conversation.id,
+								'conversation-item--opening': openingConversationId === conversation.id }"
 							@click="selectConversation(conversation)">
-							<image src="/static/default_avatar.png" class="avatar" mode="aspectFill"></image>
+							<image :src="getConversationAvatar(conversation)" class="avatar" mode="aspectFill"
+								@error="handleAvatarError(conversation)"></image>
 							<view class="conversation-copy">
 								<text class="conversation-name">{{ conversation.name }}</text>
-								<text class="conversation-preview">{{ conversation.preview }}</text>
+								<text class="conversation-preview">{{ conversation.message }}</text>
 							</view>
 							<view class="conversation-meta">
 								<text class="conversation-time">{{ conversation.time }}</text>
-								<text v-if="conversation.unread" class="unread-badge">{{ conversation.unread }}</text>
+								<text v-if="conversation.unreadCount > 0" class="unread-badge"
+									:class="{ 'unread-badge--dot': conversation.mute }">
+									{{ conversation.mute ? '' : conversation.unreadText }}
+								</text>
 							</view>
+							<view v-if="conversation.stickTop" class="pinned-corner"></view>
 						</view>
 
-						<view v-if="!visibleConversations.length" class="conversation-empty">
+						<view v-if="activeMainTab === 'recent' && isLoading && !visibleConversations.length"
+							class="conversation-empty">
+							正在加载会话...
+						</view>
+						<view v-else-if="activeMainTab === 'recent' && loadError && !visibleConversations.length"
+							class="conversation-empty conversation-empty--error" @click="loadConversations">
+							{{ loadError }}，点击重试
+						</view>
+						<view v-else-if="!visibleConversations.length" class="conversation-empty">
 							{{ activeMainTab === 'recent' && activeMessageTab === 'unread' ? '暂无未读消息' : '暂无会话' }}
 						</view>
 					</view>
 				</view>
 
 				<view class="chat-content">
-					<view class="empty-state">
+					<!-- 只有业务接口成功后才创建聊天组件，显式传入职位、简历及双方云信账号。 -->
+					<pc-chat-panel v-if="chatDetail && activeMainTab === 'recent'" :key="chatDetail.conversationId"
+						:conversation="activeConversation" :job-id="chatDetail.jobId" :resume-id="chatDetail.resumeId"
+						:person-acc-id="chatDetail.personAccId" :enterprise-acc-id="chatDetail.enterpriseAccId"
+						:detail="chatDetail" :drafts="conversationDrafts" :visible="pageVisible"
+						:opening="Boolean(openingConversationId)" @read="handleConversationRead"
+						@changed="scheduleConversationReload" @action="handleChatAction" />
+					<view v-else-if="openingConversationId" class="chat-loading-state">
+						正在打开会话...
+					</view>
+					<view v-else class="empty-state">
+						<!-- 未选择会话或接口失败时保留原空状态；只有 GetSingleChat 成功后才切换聊天面板。 -->
 						<image src="/static/pc_chat_empty.png" class="empty-image" mode="aspectFit"></image>
 						<text class="empty-tip">主动出击，心仪人才聊出来</text>
 						<view class="search-button" @click="searchTalent">搜索人才</view>
@@ -59,12 +84,39 @@
 </template>
 
 <script>
+	import {
+		NIM_EVENT,
+		getNimInstance,
+		getNimLoginError,
+		isNimLoggedIn
+	} from '../../../services/nim'
+	import {
+		getAllNimConversations,
+		normalizeAndSortConversations
+	} from '../../../services/conversation'
+	import { requestApi } from '../../../services/request'
+	import PcChatPanel from '../../../components/pc-chat-panel/pc-chat-panel.vue'
+
+	const DEFAULT_AVATAR = '/static/default_avatar.png'
+
 	export default {
+		components: { PcChatPanel },
 		data() {
 			return {
 				activeMainTab: 'recent',
 				activeMessageTab: 'all',
 				selectedId: '',
+				openingConversationId: '',
+				chatDetail: null,
+				pageVisible: false,
+				// 草稿以会话 ID 隔离，切换会话后仍可恢复，异步发送也不会清空其他会话的草稿。
+				conversationDrafts: {},
+				rawConversations: [],
+				isLoading: true,
+				loadError: '',
+				currentTime: Date.now(),
+				// 记录加载失败的远程头像 URL；资料更新成新 URL 后会自动重新尝试加载。
+				failedAvatarMap: {},
 				mainTabs: [{
 						key: 'recent',
 						label: '最近7天会话'
@@ -82,54 +134,274 @@
 						key: 'unread',
 						label: '未读消息'
 					}
-				],
-				conversations: [{
-						id: 1,
-						name: '智联叶子',
-						preview: '我正在求职，请问…',
-						time: '昨天',
-						unread: 0,
-						pinned: true
-					},
-					{
-						id: 2,
-						name: '苏珊娜测试',
-						preview: '当前不再考虑新机…',
-						time: '昨天',
-						unread: 3
-					},
-					{
-						id: 3,
-						name: '测试戴',
-						preview: '我正在求职，请问…',
-						time: '昨天',
-						unread: 1
-					},
-					{
-						id: 4,
-						name: '金华智联信息科技…',
-						preview: '好久没互动了，我…',
-						time: '08-20',
-						unread: 0
-					}
 				]
 			}
 		},
 		computed: {
+			activeConversation() {
+				if (!this.chatDetail) return null
+				return this.conversations.find(item => item.id === this.chatDetail.conversationId)
+					|| this.chatDetail.conversation
+			},
+			/**
+			 * “最近7天会话”只是产品标签：这里标准化并展示 SDK 返回的全部会话，
+			 * 不按消息时间做七天范围过滤。排序遵循置顶优先、最新消息优先。
+			 */
+			conversations() {
+				return normalizeAndSortConversations(this.rawConversations, this.currentTime)
+			},
 			unreadTotal() {
-				return this.conversations.reduce((total, conversation) => total + Number(conversation.unread || 0), 0)
+				return this.conversations.reduce((total, conversation) => {
+					return total + Number(conversation.unreadCount || 0)
+				}, 0)
 			},
 			visibleConversations() {
 				if (this.activeMainTab === 'history') return []
+				// 未读页签只判断 SDK 会话未读数，全部页签不做任何时间或未读过滤。
 				if (this.activeMessageTab === 'unread') {
-					return this.conversations.filter(conversation => conversation.unread > 0)
+					return this.conversations.filter(conversation => conversation.unreadCount > 0)
 				}
 				return this.conversations
 			}
 		},
+		onLoad() {
+			this._conversationPageAlive = true
+			this._openConversationRequestId = 0
+			this.bindConversationEvents()
+		},
+		onShow() {
+			this.pageVisible = true
+			// 页面恢复显示时主动刷新，覆盖页面隐藏期间发生的会话变化。
+			this.currentTime = Date.now()
+			this.loadConversations()
+		},
+		onHide() {
+			this.pageVisible = false
+			this.cancelOpeningConversation()
+		},
+		onUnload() {
+			this._conversationPageAlive = false
+			this.pageVisible = false
+			this.cancelOpeningConversation()
+			this.unbindConversationEvents()
+			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
+		},
 		methods: {
-			selectConversation(conversation) {
-				this.selectedId = conversation.id
+			bindConversationEvents() {
+				// SDK 单例已把原生监听转成 uni 全局事件；页面只负责订阅和在卸载时解绑。
+				uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
+				uni.$on(NIM_EVENT.LOGIN_FAILED, this.handleConversationLoadFailed)
+				uni.$on(NIM_EVENT.CONVERSATION_SYNC_STARTED, this.handleConversationSyncStarted)
+				uni.$on(NIM_EVENT.CONVERSATION_SYNC_FINISHED, this.scheduleConversationReload)
+				uni.$on(NIM_EVENT.CONVERSATION_SYNC_FAILED, this.handleConversationLoadFailed)
+				uni.$on(NIM_EVENT.CONVERSATION_CREATED, this.handleConversationCreated)
+				uni.$on(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
+				uni.$on(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
+				uni.$on(NIM_EVENT.TOTAL_UNREAD_COUNT_CHANGED, this.scheduleConversationReload)
+				uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.scheduleConversationReload)
+			},
+			unbindConversationEvents() {
+				uni.$off(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
+				uni.$off(NIM_EVENT.LOGIN_FAILED, this.handleConversationLoadFailed)
+				uni.$off(NIM_EVENT.CONVERSATION_SYNC_STARTED, this.handleConversationSyncStarted)
+				uni.$off(NIM_EVENT.CONVERSATION_SYNC_FINISHED, this.scheduleConversationReload)
+				uni.$off(NIM_EVENT.CONVERSATION_SYNC_FAILED, this.handleConversationLoadFailed)
+				uni.$off(NIM_EVENT.CONVERSATION_CREATED, this.handleConversationCreated)
+				uni.$off(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
+				uni.$off(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
+				uni.$off(NIM_EVENT.TOTAL_UNREAD_COUNT_CHANGED, this.scheduleConversationReload)
+				uni.$off(NIM_EVENT.MESSAGE_RECEIVED, this.scheduleConversationReload)
+			},
+			handleLoginStatus(status) {
+				if (status === 1) this.scheduleConversationReload()
+			},
+			handleConversationSyncStarted() {
+				if (!this.rawConversations.length) this.isLoading = true
+			},
+			handleConversationLoadFailed(error) {
+				this.isLoading = false
+				this.loadError = error && (error.message || error.desc)
+					? error.message || error.desc
+					: '会话加载失败'
+			},
+			handleConversationCreated(conversation) {
+				this.upsertConversations([conversation])
+				// 完整刷新会同时从网易云获取新会话用户的昵称与头像。
+				this.scheduleConversationReload()
+			},
+			handleConversationChanged(conversationList) {
+				this.upsertConversations(conversationList)
+				// 更新消息摘要、未读数后再次补齐最新用户资料。
+				this.scheduleConversationReload()
+			},
+			handleConversationDeleted(conversationIds) {
+				const deletedIdSet = new Set((Array.isArray(conversationIds) ? conversationIds : [])
+					.map(conversationId => String(conversationId)))
+				this.rawConversations = this.rawConversations.filter(conversation => {
+					return !deletedIdSet.has(String(conversation.conversationId))
+				})
+				if (deletedIdSet.has(String(this.selectedId))) {
+					this.selectedId = ''
+					this.chatDetail = null
+				}
+				if (deletedIdSet.has(String(this.openingConversationId))) this.cancelOpeningConversation()
+				if (this._conversationLoadPromise) this._conversationReloadPending = true
+			},
+			upsertConversations(conversationList) {
+				if (!Array.isArray(conversationList) || !conversationList.length) return
+
+				const conversationMap = new Map(this.rawConversations.map(conversation => [
+					String(conversation.conversationId),
+					conversation
+				]))
+				conversationList.forEach(conversation => {
+					if (!conversation || !conversation.conversationId) return
+					const conversationId = String(conversation.conversationId)
+					const previous = conversationMap.get(conversationId) || {}
+					conversationMap.set(conversationId, {
+						...previous,
+						...conversation,
+						// 事件对象资料为空时保留上次从 V2NIMUserService 获取的展示信息。
+						name: conversation.name || previous.name,
+						avatar: conversation.avatar || previous.avatar
+					})
+				})
+
+				this.currentTime = Date.now()
+				this.rawConversations = Array.from(conversationMap.values())
+			},
+			scheduleConversationReload() {
+				if (!this._conversationPageAlive) return
+				if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
+				// 合并同批消息触发的多个 SDK 通知，避免重复分页和重复拉取用户资料。
+				this._conversationRefreshTimer = setTimeout(() => {
+					this._conversationRefreshTimer = null
+					this.loadConversations()
+				}, 80)
+			},
+			async loadConversations() {
+				if (!this._conversationPageAlive) return
+				if (!isNimLoggedIn()) {
+					const loginError = getNimLoginError()
+					if (loginError) {
+						this.handleConversationLoadFailed(loginError)
+						return
+					}
+					// App.vue 正在异步登录，成功后 LOGIN_STATUS 事件会触发实际加载。
+					this.isLoading = !this.rawConversations.length
+					return
+				}
+				if (this._conversationLoadPromise) {
+					this._conversationReloadPending = true
+					return this._conversationLoadPromise
+				}
+
+				this.isLoading = !this.rawConversations.length
+				this.loadError = ''
+				// getAllNimConversations 会拉完全部分页，并批量获取 P2P 对方的网易云用户资料。
+				this._conversationLoadPromise = getAllNimConversations()
+					.then(conversationList => {
+						if (!this._conversationPageAlive) return
+						this.currentTime = Date.now()
+						this.rawConversations = conversationList
+					})
+					.catch(error => {
+						if (!this._conversationPageAlive) return
+						console.error('[NIM] PC 端获取会话列表失败', error)
+						this.handleConversationLoadFailed(error)
+					})
+					.finally(() => {
+						if (this._conversationPageAlive) this.isLoading = false
+						this._conversationLoadPromise = null
+						if (this._conversationReloadPending && this._conversationPageAlive) {
+							this._conversationReloadPending = false
+							this.loadConversations()
+						}
+					})
+
+				return this._conversationLoadPromise
+			},
+			getConversationAvatar(conversation) {
+				const avatar = conversation && conversation.avatar ? conversation.avatar : DEFAULT_AVATAR
+				return this.failedAvatarMap[conversation.id] === avatar ? DEFAULT_AVATAR : avatar
+			},
+			handleAvatarError(conversation) {
+				if (!conversation || !conversation.id || !conversation.avatar) return
+				this.$set(this.failedAvatarMap, conversation.id, conversation.avatar)
+			},
+			cancelOpeningConversation() {
+				// 无需取消底层网络请求：递增序号即可让旧响应在切换、隐藏或卸载后失效。
+				this._openConversationRequestId += 1
+				this.openingConversationId = ''
+			},
+			switchMainTab(key) {
+				if (key === this.activeMainTab) return
+				this.cancelOpeningConversation()
+				this.activeMainTab = key
+			},
+			async selectConversation(conversation) {
+				if (this.activeMainTab !== 'recent' || !conversation || !conversation.id) return
+				if (this.openingConversationId === conversation.id) return
+				if (this.selectedId === conversation.id && this.chatDetail) {
+					this.cancelOpeningConversation()
+					return
+				}
+				if (!isNimLoggedIn() || conversation.type !== 1) {
+					uni.showToast({ title: conversation.type !== 1 ? '请选择人才单聊会话' : '聊天服务尚未就绪', icon: 'none' })
+					return
+				}
+
+				// 企业 PC 端：当前登录账号为企业，P2P 会话的 targetId 为人才，不能沿用个人端方向。
+				const enterpriseAccId = String(getNimInstance().V2NIMLoginService.getLoginUser() || '').trim()
+				const personAccId = String(conversation.targetId || '').trim()
+				if (!enterpriseAccId || !personAccId) {
+					uni.showToast({ title: '未获取到会话账号信息', icon: 'none' })
+					return
+				}
+
+				const requestId = ++this._openConversationRequestId
+				const isCurrent = () => this._conversationPageAlive && this.pageVisible
+					&& requestId === this._openConversationRequestId
+				this.openingConversationId = conversation.id
+				try {
+					const response = await requestApi({
+						Name: 'Chat.Chat.GetSingleChat',
+						Content: { PersonAccId: personAccId, EnterpriseAccId: enterpriseAccId }
+					})
+					if (!isCurrent()) return
+					if (!response || Number(response.Code) !== 0) throw new Error('获取会话信息失败')
+					const data = typeof response.Data === 'string' ? JSON.parse(response.Data) : response.Data
+					if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('会话信息格式不正确')
+					if (data.Code !== undefined && Number(data.Code) !== 0) throw new Error('获取会话信息失败')
+					const jobId = String(data.JobId === undefined || data.JobId === null ? '' : data.JobId).trim()
+					const resumeId = String(data.ResumeId === undefined || data.ResumeId === null ? '' : data.ResumeId).trim()
+					if (!jobId || !resumeId) throw new Error('会话信息缺少职位或简历')
+					// 账号若有返回则必须与所点击的会话一致，防止业务资料与云信消息串到另一位人才。
+					if ((data.PersonAccId && String(data.PersonAccId).trim() !== personAccId)
+						|| (data.EnterpriseAccId && String(data.EnterpriseAccId).trim() !== enterpriseAccId)) {
+						throw new Error('会话账号与所选人才不一致')
+					}
+					this.chatDetail = {
+						conversationId: conversation.id, conversation, jobId, resumeId, personAccId, enterpriseAccId,
+						isPinned: data.IsTop === true || data.IsTop === 1 || data.IsTop === 'true',
+						chatByQRcode: data.ChatByQRcode || ''
+					}
+					this.selectedId = conversation.id
+				} catch (error) {
+					if (!isCurrent()) return
+					uni.showToast({ title: error && error.message ? error.message : '打开会话失败', icon: 'none' })
+				} finally {
+					if (isCurrent()) this.openingConversationId = ''
+				}
+			},
+			handleConversationRead(conversationId) {
+				// 实际进入聊天区后才同步清除本地展示的未读数，接口失败不会提前消除红点。
+				this.rawConversations = this.rawConversations.map(item => item.conversationId === conversationId
+					? { ...item, unreadCount: 0, hasNewMessage: false } : item)
+			},
+			handleChatAction(action) {
+				// 预留业务操作入口，组件已经携带当前 jobId/resumeId，后续接入简历、职位切换等页面。
+				uni.showToast({ title: `${action.label}功能暂未接入`, icon: 'none' })
 			},
 			searchTalent() {
 				uni.showToast({
@@ -300,6 +572,11 @@
 		&.conversation-item--selected {
 			background: #f8fbfe;
 		}
+
+		&.conversation-item--opening {
+			background: #eef6ff;
+			cursor: progress;
+		}
 	}
 
 	.avatar {
@@ -341,7 +618,7 @@
 
 	.conversation-meta {
 		display: flex;
-		flex: 0 0 54px;
+		flex: 0 0 80px;
 		align-items: flex-end;
 		align-self: stretch;
 		flex-direction: column;
@@ -368,6 +645,15 @@
 		color: #ffffff;
 		background: #ff4d43;
 		border-radius: 10px;
+
+		&.unread-badge--dot {
+			width: 8px;
+			min-width: 8px;
+			height: 8px;
+			margin-top: 10px;
+			padding: 0;
+			border-radius: 50%;
+		}
 	}
 
 	.conversation-empty {
@@ -375,13 +661,38 @@
 		font-size: 14px;
 		text-align: center;
 		color: #a4a9ae;
+
+		&.conversation-empty--error {
+			color: #126bd1;
+			cursor: pointer;
+		}
+	}
+
+	.pinned-corner {
+		position: absolute;
+		top: 0;
+		right: 0;
+		width: 0;
+		height: 0;
+		border-top: 15px solid #ffdd00;
+		border-left: 15px solid transparent;
 	}
 
 	.chat-content {
 		position: relative;
 		flex: 1;
+		min-width: 0;
 		height: 100%;
 		border-radius: 6px 6px 0 0;
+	}
+
+	.chat-loading-state {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 100%;
+		font-size: 14px;
+		color: #929ba4;
 	}
 
 	.empty-state {

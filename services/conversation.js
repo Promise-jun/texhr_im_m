@@ -101,6 +101,8 @@ export function getConversationActivityTime(conversation) {
 		: null
 
 	return toTimestamp(messageRefer && messageRefer.createTime)
+		// 没有可用的最新消息时间时使用 SDK 提供的排序时间，保证会话仍按活跃度排列。
+		|| toTimestamp(conversation && conversation.sortOrder)
 		|| toTimestamp(conversation && conversation.createTime)
 		|| toTimestamp(conversation && conversation.updateTime)
 }
