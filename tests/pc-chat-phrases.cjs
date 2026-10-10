@@ -23,6 +23,7 @@ function environment() {
     createTime: sends.length, senderId: 'enterprise', isSelf: true
   } })
   const nim = {
+    V2NIMUserService: { checkBlock: async accounts => ({ [accounts[0]]: false }) },
     V2NIMMessageCreator: { createTextMessage: text => ({ text }) },
     V2NIMMessageService: { sendMessage: (message, id) => {
       sends.push({ text: message.text, conversationId: id })
@@ -62,10 +63,11 @@ async function verify() {
     { Id: 'top-b', Msg: '欢迎进一步沟通。[大笑]', IsTop: true }
   ]
   env.request(async args => args.Name === 'Chat.MyChat.Limits'
-    ? { Code: 0, Data: {} } : { Code: 0, Data: { Rows: rows } })
+    ? { Code: 0, Data: { JobName: '后端工程师' } } : { Code: 0, Data: { Rows: rows } })
   await panel.loadChatAccess()
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(env.calls[0].Name, 'Chat.MyChat.Limits')
+  assert.equal(panel.jobName, '后端工程师')
   assert.equal(env.calls[1].Name, 'Chat.CommonLanguage.Get')
   assert.equal(env.calls[1].Content, '')
   assert.equal(env.state.prepares, 1)
@@ -74,6 +76,30 @@ async function verify() {
   assert.equal(panel.commonPhrasesLoaded, true)
   assert.equal(panel.isLoadingCommonPhrases, false)
   console.log('PASS: entering an allowed conversation loads Msg/Id/IsTop rows; blank content is filtered and pinned order is stable')
+
+  env.request(async args => args.Name === 'Chat.Chat.GetJobList'
+    ? { Code: 0, Data: { Rows: [
+      { JobId: 7, JobName: '后端工程师', Location: '深圳', Salary: '20-30K' },
+      { Id: 'job-8', Name: '前端工程师', Area: '上海', SalaryText: '15-25K' }
+    ] } } : { Code: 0, Data: { Rows: [] } })
+  panel.emitAction('switch-job', '切换职位')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const jobCall = env.calls.find(item => item.Name === 'Chat.Chat.GetJobList')
+  assert.deepEqual(jobCall.Content, { Start: 0, pageSize: 50 })
+  assert.deepEqual(panel.jobList.map(item => `${item.name}-${item.location}-${item.salary}`), [
+    '后端工程师-深圳-20-30K', '前端工程师-上海-15-25K'
+  ])
+  assert.equal(panel.jobPickerVisible, true)
+  panel.closeJobPicker()
+  assert.equal(panel.jobPickerVisible, false)
+  console.log('PASS: switching jobs requests the first 50 jobs and formats name, location and salary')
+
+  env.request(async args => args.Name === 'Chat.Chat.GetJobList'
+    ? { Code: 0, Data: { Rows: [] } } : { Code: 0, Data: { Rows: [] } })
+  await panel.loadJobList()
+  assert.equal(panel.jobPickerVisible, true)
+  assert.equal(panel.jobList.length, 0)
+  console.log('PASS: an empty job response keeps the picker open for the publish prompt')
 
   const loading = environment(), response = deferred()
   loading.request(() => response.promise)
@@ -145,6 +171,7 @@ async function verify() {
   assert.equal(panel.sendingPhraseKey, phrase.key)
   const duplicate = panel.sendCommonPhrase(phrase)
   const normalWhileSending = panel.sendMessage()
+  await new Promise(resolve => setImmediate(resolve)) // 发送前先完成异步黑名单查询。
   assert.equal(env.sends.length, 2)
   await duplicate
   await normalWhileSending

@@ -62,12 +62,12 @@
 
 				<view class="chat-content">
 					<!-- 只有业务接口成功后才创建聊天组件，显式传入职位、简历及双方云信账号。 -->
-					<pc-chat-panel v-if="chatDetail && activeMainTab === 'recent'" :key="chatDetail.conversationId"
+					<pc-chat-panel v-if="chatDetail && activeMainTab === 'recent'" :key="chatDetail.conversationId + '-' + chatDetail.jobId"
 						:conversation="activeConversation" :job-id="chatDetail.jobId" :resume-id="chatDetail.resumeId"
 						:person-acc-id="chatDetail.personAccId" :enterprise-acc-id="chatDetail.enterpriseAccId"
 						:detail="chatDetail" :drafts="conversationDrafts" :visible="pageVisible"
 						:opening="Boolean(openingConversationId)" @read="handleConversationRead"
-						@changed="scheduleConversationReload" @action="handleChatAction" />
+						@changed="scheduleConversationReload" @pin-changed="handleConversationPinChanged" @action="handleChatAction" />
 					<view v-else-if="openingConversationId" class="chat-loading-state">
 						正在打开会话...
 					</view>
@@ -381,9 +381,13 @@
 						|| (data.EnterpriseAccId && String(data.EnterpriseAccId).trim() !== enterpriseAccId)) {
 						throw new Error('会话账号与所选人才不一致')
 					}
+					// 与手机端一致解析业务置顶状态，只有接口未返回 IsTop 时才回退到云信缓存。
+					const isTop = data.IsTop !== undefined ? data.IsTop : response.IsTop
 					this.chatDetail = {
 						conversationId: conversation.id, conversation, jobId, resumeId, personAccId, enterpriseAccId,
-						isPinned: data.IsTop === true || data.IsTop === 1 || data.IsTop === 'true',
+						jobName: data.JobName === undefined || data.JobName === null ? '' : String(data.JobName),
+						isPinned: isTop === undefined ? Boolean(conversation.stickTop)
+							: isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true',
 						chatByQRcode: data.ChatByQRcode || ''
 					}
 					this.selectedId = conversation.id
@@ -399,8 +403,28 @@
 				this.rawConversations = this.rawConversations.map(item => item.conversationId === conversationId
 					? { ...item, unreadCount: 0, hasNewMessage: false } : item)
 			},
+			handleConversationPinChanged({ conversationId, isPinned }) {
+				if (!this._conversationPageAlive || !conversationId) return
+				// 业务保存成功即更新置顶角标与排序，只改 stickTop，保留消息时间、未读数和草稿。
+				this.rawConversations = this.rawConversations.map(item => item.conversationId === conversationId
+					? { ...item, stickTop: isPinned } : item)
+				if (this.chatDetail && this.chatDetail.conversationId === conversationId) {
+					// 同步备用会话快照，切换职位重建面板后仍能恢复最新置顶状态。
+					this.chatDetail = { ...this.chatDetail, isPinned,
+						conversation: { ...this.chatDetail.conversation, stickTop: isPinned } }
+				}
+			},
 			handleChatAction(action) {
-				// 预留业务操作入口，组件已经携带当前 jobId/resumeId，后续接入简历、职位切换等页面。
+				if (action && action.key === 'select-job' && action.job && action.job.jobId) {
+					// 选择新职位后重建聊天面板，让它重新调用 Limits 校验新的职位权限。
+					this.chatDetail = {
+						...this.chatDetail,
+						jobId: String(action.job.jobId),
+						jobName: action.job.name || ''
+					}
+					return
+				}
+				// 其它业务操作统一保留占位提示，避免误认为已经完成对应业务动作。
 				uni.showToast({ title: `${action.label}功能暂未接入`, icon: 'none' })
 			},
 			searchTalent() {

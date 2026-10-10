@@ -746,7 +746,7 @@
 			async loadChatAccess() {
 				if (this.isCheckingLimits) return
 
-				if (!this.jobId || !this.resumeId) {
+				if (!this.jobId) {
 					this.historyLoadError = '缺少 jobId 或 resumeId'
 					return
 				}

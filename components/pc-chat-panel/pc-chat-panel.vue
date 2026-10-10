@@ -3,7 +3,7 @@
 		<view class="chat-panel-header">
 			<view class="job-context">
 				<text>当前沟通职位：</text>
-				<text class="job-name">{{ detail.jobName || '职位沟通' }}</text>
+				<text class="job-name">{{ jobName || detail.jobName || '职位沟通' }}</text>
 				<text class="action-link" @click="emitAction('switch-job', '切换职位')">切换</text>
 			</view>
 			<text class="chat-title">{{ otherUser.name || conversation.name }}</text>
@@ -80,8 +80,27 @@
 				<!-- <text class="composer-tool" @click="emitAction('mobile', '手机聊天')"><text class="tool-icon">▦</text> 手机聊天</text> -->
 				<view class="toolbar-right">
 					<text class="composer-tool" @click="emitAction('unsuitable', '不合适')"><text class="tool-icon">⊗</text> 不合适</text>
-					<text class="composer-tool" @click="togglePinned"><text class="tool-icon">↥</text> {{ isPinned ? '取消置顶' : '置顶' }}</text>
-					<text class="composer-tool tool-more" @click="emitAction('more', '更多')">···</text>
+					<!-- 权限校验完成后才可置顶；保存期间禁用入口，避免连续点击重复提交。 -->
+					<button class="composer-tool composer-tool--button composer-pin" :class="{ 'composer-tool--active': isPinned }"
+						:disabled="isPinning || !accessReady || opening" :aria-busy="isPinning ? 'true' : 'false'"
+						:aria-pressed="isPinned ? 'true' : 'false'" :title="isPinned ? '取消置顶' : '置顶'" @click="togglePinned">
+						<text class="tool-icon">↥</text> {{ isPinning ? '保存中...' : isPinned ? '取消置顶' : '置顶' }}
+					</button>
+					<view class="more-menu-trigger" @mouseenter="openMoreMenu" @mouseleave="moreMenuVisible = false"
+						@focusin="openMoreMenu" @focusout="handleMoreMenuBlur" @click.stop>
+						<button class="composer-tool composer-tool--button tool-more" aria-label="更多操作"
+							aria-haspopup="true" :aria-expanded="moreMenuVisible ? 'true' : 'false'" @click="openMoreMenu">···</button>
+						<view v-if="moreMenuVisible" class="more-menu-popover">
+							<view class="more-menu">
+								<!-- 黑名单状态来自云信；查询和保存期间禁用，避免按旧状态执行反向操作。 -->
+								<button class="more-menu-item" :title="blockStatusError || blockActionLabel"
+									:disabled="isCheckingBlockStatus || isUpdatingBlockStatus || !accessReady || opening"
+									:aria-busy="isCheckingBlockStatus || isUpdatingBlockStatus ? 'true' : 'false'"
+									@click="selectMoreAction('block')">{{ blockActionLabel }}</button>
+								<button class="more-menu-item" @click="selectMoreAction('report', '举报')">举报</button>
+							</view>
+						</view>
+					</view>
 				</view>
 			</view>
 			<view v-if="phrasesVisible" class="phrase-panel" @click.stop>
@@ -126,6 +145,28 @@
 				</view>
 			</view>
 		</view>
+
+		<!-- 切换职位弹窗：职位来源于 Chat.Chat.GetJobList，避免使用会话详情中的旧职位。 -->
+		<view v-if="jobPickerVisible" class="job-picker-mask" @click="closeJobPicker">
+			<view class="job-picker" @click.stop>
+				<view class="job-picker-header">
+					<text class="job-picker-title">{{ jobList.length || isLoadingJobs || jobListError ? '点击选择沟通职位' : '暂无职位数据，马上发布发起聊天吧' }}</text>
+					<button class="job-picker-close" aria-label="关闭职位列表" title="关闭" @click="closeJobPicker">×</button>
+				</view>
+				<view v-if="isLoadingJobs" class="job-picker-state">职位加载中...</view>
+				<view v-else-if="jobListError" class="job-picker-state job-picker-state--error">{{ jobListError }}</view>
+				<view v-else-if="!jobList.length" class="job-picker-empty">
+					<text>暂无职位数据，马上发布发起聊天吧</text>
+					<button class="job-publish-button" @click="emitAction('publish-job', '马上发布')">马上发布</button>
+				</view>
+				<scroll-view v-else scroll-y class="job-picker-list">
+					<button v-for="job in jobList" :key="job.key" class="job-picker-item" @click="selectJob(job)">
+						<text class="job-picker-item-name">{{ job.name }}</text>
+						<text class="job-picker-item-detail">{{ job.location }} - {{ job.salary }}</text>
+					</button>
+				</scroll-view>
+			</view>
+		</view>
 	</view>
 </template>
 
@@ -142,7 +183,23 @@
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const HISTORY_PAGE_SIZE = 50
 	const COMMON_LANGUAGE_GET_API = 'Chat.CommonLanguage.Get'
+	const JOB_LIST_GET_API = 'Chat.Chat.GetJobList'
+	const BLOCKED_USER_SEND_WARNING = '对方在您的黑名单中，无法回复您的消息'
+	const TALENT_BLOCKED_SEND_CODE = '102426'
+	const TALENT_BLOCKED_SEND_MESSAGE = '该人才已屏蔽您的消息，暂不能发送消息'
 	const MESSAGE_LABELS = { 2: '[语音]', 3: '[视频]', 4: '[位置]', 6: '[文件]', 100: '[自定义消息]' }
+
+	function getSendFailureMessage(error) {
+		// 沿用手机端错误码取值方式，兼容 SDK 数字 code 和接口包装后的字符串 code。
+		const codes = error && typeof error === 'object' ? [
+			error.code, error.Code, error.errCode, error.errorCode,
+			error.data && error.data.code, error.data && error.data.Code,
+			error.detail && error.detail.code, error.detail && error.detail.Code
+		] : []
+		const code = codes.find(value => value !== undefined && value !== null && value !== '')
+		if (String(code) === TALENT_BLOCKED_SEND_CODE) return TALENT_BLOCKED_SEND_MESSAGE
+		return error && error.message ? error.message : '消息发送失败，请重试'
+	}
 
 	function messageId(message) {
 		return String(message.messageClientId || message.messageServerId ||
@@ -155,6 +212,16 @@
 		if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('沟通状态格式不正确')
 		if (data.Code !== undefined && Number(data.Code) !== 0) throw new Error('获取沟通状态失败')
 		return data
+	}
+
+	function responseValue(item, fields) {
+		if (!item || typeof item !== 'object') return ''
+		for (const field of fields) {
+			if (item[field] !== undefined && item[field] !== null && String(item[field]).trim()) {
+				return String(item[field]).trim()
+			}
+		}
+		return ''
 	}
 
 	export default {
@@ -172,12 +239,19 @@
 		},
 		data() {
 			return {
+				jobName: this.detail.jobName || '',
+				jobPickerVisible: false, isLoadingJobs: false, jobList: [], jobListError: '',
 				messages: [], accessReady: false, isCheckingAccess: false, accessError: '',
 				isLoadingHistory: false, historyExhausted: false, historyError: '', scrollTarget: '',
 				isSending: false, isComposing: false, selfUser: {}, otherUser: {}, failedAvatars: {},
 				audioActiveId: '', audioState: 'idle', audioDurations: {},
-				isPinning: false, isPinned: this.detail.isPinned || this.conversation.stickTop, emojiVisible: false,
-				phrasesVisible: false, commonPhrases: [], commonPhrasesLoaded: false,
+				// 业务接口明确返回 false 时不能被云信旧缓存覆盖；未返回状态时才使用本地会话兜底。
+				isPinning: false, isPinned: this.detail.isPinned !== undefined
+					? Boolean(this.detail.isPinned) : Boolean(this.conversation.stickTop), emojiVisible: false,
+				moreMenuVisible: false, phrasesVisible: false, commonPhrases: [], commonPhrasesLoaded: false,
+				// 查询成功前不把默认 false 当成真实状态；失败时只提供重试，不直接执行屏蔽。
+				isOtherBlocked: false, blockStatusLoaded: false, blockStatusError: '',
+				isCheckingBlockStatus: false, isUpdatingBlockStatus: false,
 				isLoadingCommonPhrases: false, commonPhrasesError: '', sendingPhraseKey: '',
 				// 与手机端共用网易云信官方表情数据，发送时写入 [表情名] key。
 				emojis: NIM_EMOJIS
@@ -191,6 +265,12 @@
 			},
 			canSendText() { return this.visible && this.accessReady && !this.opening && !this.isSending },
 			canSend() { return this.canSendText && Boolean(this.draft.trim()) },
+			blockActionLabel() {
+				if (this.isUpdatingBlockStatus) return '处理中...'
+				if (this.isCheckingBlockStatus) return '查询中...'
+				if (!this.blockStatusLoaded) return '重试查询'
+				return this.isOtherBlocked ? '取消屏蔽' : '屏蔽TA'
+			},
 			selfAvatar() { return this.profileAvatar(this.selfUser.avatar) },
 			otherAvatar() { return this.profileAvatar(this.otherUser.avatar || this.conversation.avatar) },
 			genderLabel() { return { 1: '男', 2: '女' }[this.otherUser.gender] || '' },
@@ -233,8 +313,7 @@
 					this.activateConversation()
 					this.loadEarlierMessages(true)
 				}
-			},
-			'conversation.stickTop'(value) { this.isPinned = Boolean(value) }
+			}
 		},
 		mounted() {
 			this._alive = true
@@ -300,6 +379,15 @@
 					})
 					const data = responseData(response)
 					if (!this._alive) return
+					// 与手机端一致，以 Limits 的 IsTop 为准，兼容 Data、根节点及布尔/数字/字符串返回值。
+					// 不监听 stickTop 覆盖业务状态，避免云信同步失败或旧列表刷新时把已保存的状态改回去。
+					const isTop = data.IsTop !== undefined ? data.IsTop : response.IsTop
+					if (isTop !== undefined) {
+						this.isPinned = isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true'
+					}
+					// 当前沟通职位名称以权限接口返回值为准；兼容名称位于 Data 或响应根节点。
+					const jobName = data.JobName !== undefined ? data.JobName : response.JobName
+					if (jobName !== undefined && jobName !== null) this.jobName = String(jobName).trim()
 					// 与现有聊天页一致，兼容权限提示位于 Data 或响应根节点的返回结构。
 					const successStep = data.SuccessStep || response.SuccessStep
 					if (successStep) {
@@ -337,7 +425,11 @@
 			},
 			handleLoginStatus(status) {
 				if (status === 1 && this.accessReady) this.prepareConversation()
-				else if (status !== 1) this.releaseCurrentConversation()
+				else if (status !== 1) {
+					// 断线后旧黑名单缓存不可用于写入，重新登录并展开菜单时再查询。
+					this.blockStatusLoaded = false
+					this.releaseCurrentConversation()
+				}
 			},
 			activateConversation() {
 				if (!this.visible || !this.accessReady || !isNimLoggedIn()) return
@@ -473,16 +565,159 @@
 			closeComposerPanels() {
 				this.emojiVisible = false
 				this.phrasesVisible = false
+				this.moreMenuVisible = false
+			},
+			openMoreMenu() {
+				if (!this._alive || !this.visible || this.opening) return
+				const wasVisible = this.moreMenuVisible
+				this.emojiVisible = false
+				this.phrasesVisible = false
+				this.moreMenuVisible = true
+				// 每次重新展开都查询云信，兼容其它客户端修改黑名单；同一次悬停/点击不重复请求。
+				if (!wasVisible && !this.isUpdatingBlockStatus) this.loadBlockStatus()
+			},
+			handleMoreMenuBlur(event) {
+				if (!event.currentTarget.contains(event.relatedTarget)) this.moreMenuVisible = false
+			},
+			selectMoreAction(key, label) {
+				// 屏蔽由面板直接调用 SDK，不能再交给父页的业务占位提示。
+				if (key === 'block') return this.handleMessagePermissionAction()
+				this.closeComposerPanels()
+				this.emitAction(key, label)
+			},
+			async loadBlockStatus() {
+				if (!this._alive || !this.visible || this.opening || this.isCheckingBlockStatus || this.isUpdatingBlockStatus) return false
+				const personAccId = this.personAccId
+				this.isCheckingBlockStatus = true
+				this.blockStatusLoaded = false
+				this.blockStatusError = ''
+				try {
+					if (!personAccId) throw new Error('未获取到聊天对象账号')
+					if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪')
+					const userService = getNimInstance().V2NIMUserService
+					if (!userService || typeof userService.checkBlock !== 'function') {
+						throw new Error('当前聊天服务不支持黑名单状态查询')
+					}
+					// 沿用手机端 checkBlock；PC 企业端的屏蔽对象是人才，不能传当前企业账号。
+					const blockStatus = await userService.checkBlock([personAccId])
+					if (!this._alive || this.personAccId !== personAccId || !isNimLoggedIn()) return false
+					if (!blockStatus || typeof blockStatus[personAccId] !== 'boolean') {
+						throw new Error('黑名单状态查询结果格式不正确')
+					}
+					this.isOtherBlocked = blockStatus[personAccId]
+					this.blockStatusLoaded = true
+					// 查询结束只更新菜单文案，不重新展开已被鼠标移出或 Escape 关闭的菜单。
+					return true
+				} catch (error) {
+					if (this._alive && this.personAccId === personAccId) {
+						this.blockStatusError = error && error.message ? error.message : '查询黑名单状态失败'
+						console.warn('[PC Chat] 查询用户云信黑名单状态失败', error)
+					}
+					return false
+				} finally {
+					if (this._alive && this.personAccId === personAccId) this.isCheckingBlockStatus = false
+				}
+			},
+			async handleMessagePermissionAction() {
+				// 查询与写入共用入口锁；切换会话期间不能操作仍显示着的旧人才面板。
+				if (!this._alive || !this.visible || this.opening || this.isCheckingBlockStatus || this.isUpdatingBlockStatus) return
+				if (!this.accessReady) {
+					uni.showToast({ title: this.isCheckingAccess ? '沟通信息加载中，请稍候' : '沟通权限尚未就绪', icon: 'none' })
+					return
+				}
+				if (!this.personAccId || !isNimLoggedIn()) {
+					uni.showToast({ title: !this.personAccId ? '未获取到聊天对象账号' : '聊天服务尚未就绪', icon: 'none' })
+					return
+				}
+				// 首次查询或查询失败后的点击只重试查询，用户确认新文案后再点击执行操作。
+				if (!this.blockStatusLoaded) return this.loadBlockStatus()
+				const personAccId = this.personAccId
+				const shouldRemoveFromBlockList = this.isOtherBlocked
+				const methodName = shouldRemoveFromBlockList ? 'removeUserFromBlockList' : 'addUserToBlockList'
+				this.isUpdatingBlockStatus = true
+				try {
+					const userService = getNimInstance().V2NIMUserService
+					if (!userService || typeof userService[methodName] !== 'function') {
+						throw new Error('当前聊天服务不支持黑名单操作')
+					}
+					// 与手机端使用相同 SDK 写入云端黑名单；成功后才更新本地状态，失败保留原状态便于重试。
+					await userService[methodName](personAccId)
+					if (!this._alive || this.personAccId !== personAccId || !isNimLoggedIn()) return
+					this.isOtherBlocked = !shouldRemoveFromBlockList
+					this.closeComposerPanels()
+					if (this.visible && !this.opening) {
+						uni.showToast({ title: shouldRemoveFromBlockList ? '取消屏蔽成功' : '屏蔽成功', icon: 'success' })
+					}
+				} catch (error) {
+					console.warn('[PC Chat] 更新用户云信黑名单状态失败', error)
+					// 父页为每个会话创建独立面板；旧请求完成后不能更新新会话，也不能弹出过期提示。
+					if (this._alive && this.personAccId === personAccId && this.visible && !this.opening) {
+						uni.showToast({ title: error && error.message ? error.message
+							: shouldRemoveFromBlockList ? '取消屏蔽失败' : '屏蔽失败', icon: 'none' })
+					}
+				} finally {
+					if (this._alive && this.personAccId === personAccId) this.isUpdatingBlockStatus = false
+				}
 			},
 			toggleEmojiPanel() {
 				this.emojiVisible = !this.emojiVisible
 				this.phrasesVisible = false
+				this.moreMenuVisible = false
 			},
 			togglePhrasePanel() {
 				this.phrasesVisible = !this.phrasesVisible
 				this.emojiVisible = false
+				this.moreMenuVisible = false
 				// 成功返回空列表也视为已加载，避免每次打开都重复请求；失败则允许重新获取。
 				if (this.phrasesVisible && !this.commonPhrasesLoaded) this.loadCommonPhrases()
+			},
+			switchJob() {
+				this.closeComposerPanels()
+				this.loadJobList()
+			},
+			closeJobPicker() {
+				this.jobPickerVisible = false
+			},
+			async loadJobList() {
+				if (!this._alive || this.isLoadingJobs) return
+				this.jobPickerVisible = true
+				this.isLoadingJobs = true
+				this.jobListError = ''
+				try {
+					// 职位切换固定读取首批 50 条，接口字段 pageSize 按服务端约定保留小写 S。
+					const response = await requestApi({ Name: JOB_LIST_GET_API, Content: { Start: 0, pageSize: 50 } })
+					if (!this._alive) return
+					if (!response || Number(response.Code) !== 0) throw new Error('获取职位列表失败')
+					let data = response.Data
+					if (typeof data === 'string') data = JSON.parse(data)
+					if (Array.isArray(data)) data = { Rows: data }
+					if (!data || typeof data !== 'object') data = response
+					if (data.Code !== undefined && Number(data.Code) !== 0) throw new Error('获取职位列表失败')
+					const rows = Array.isArray(data.Rows) ? data.Rows : Array.isArray(data.List) ? data.List :
+						(Array.isArray(response.Rows) ? response.Rows : [])
+					this.jobList = rows.map((item, index) => {
+						const name = responseValue(item, ['JobName', 'Name', 'PositionName', 'Title']) || '未命名职位'
+						const location = responseValue(item, ['Location', 'JobLocation', 'WorkLocation', 'Address', 'Area']) || '-'
+						const salary = responseValue(item, ['Salary', 'SalaryText', 'Pay']) || '-'
+						return {
+							key: responseValue(item, ['JobId', 'Id', 'ID']) || `job-${index}`,
+							jobId: responseValue(item, ['JobId', 'Id', 'ID']), name, location, salary
+						}
+					})
+				} catch (error) {
+					if (!this._alive) return
+					this.jobList = []
+					this.jobListError = error.message || '获取职位列表失败，请重试'
+				} finally {
+					if (this._alive) this.isLoadingJobs = false
+				}
+			},
+			selectJob(job) {
+				if (!job) return
+				this.closeJobPicker()
+				// 选择结果交由页面处理，面板只负责展示列表，不擅自切换当前会话权限。
+				this.$emit('action', { key: 'select-job', label: '选择职位', job, jobId: job.jobId,
+					resumeId: this.resumeId, personAccId: this.personAccId, enterpriseAccId: this.enterpriseAccId })
 			},
 			async loadCommonPhrases() {
 				if (!this._alive || this.isLoadingCommonPhrases) return
@@ -530,57 +765,134 @@
 				return this.sendTextMessage(draft, draft)
 			},
 			async sendTextMessage(text, draftSnapshot) {
-				if (!this._alive || !this.canSendText || typeof text !== 'string' || !text.trim()) return false
-				if (!isNimLoggedIn()) { uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' }); return false }
+				if (typeof text !== 'string' || !text.trim()) return false
+				// 文本、表情和常用语都交给统一发送入口，不单独绕过黑名单查询。
+				return this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(text.trim()), draftSnapshot)
+			},
+			async checkOtherBlockedBeforeSend(nim, personAccId) {
 				const conversationId = this.conversationId
+				try {
+					const userService = nim.V2NIMUserService
+					if (!personAccId || !userService || typeof userService.checkBlock !== 'function') {
+						throw new Error('当前聊天服务无法查询人才黑名单状态')
+					}
+					// 每条消息发送前重新查云信，不依赖更多菜单缓存；仅查询，不与菜单的屏蔽写入争用状态。
+					const blockStatus = await userService.checkBlock([personAccId])
+					if (!blockStatus || typeof blockStatus[personAccId] !== 'boolean') {
+						throw new Error('黑名单状态查询结果格式不正确')
+					}
+					const isBlocked = blockStatus[personAccId]
+					if (isBlocked && this._alive && this.visible && !this.opening && this.accessReady && isNimLoggedIn() &&
+						this.personAccId === personAccId && this.conversationId === conversationId) {
+						uni.showToast({ title: BLOCKED_USER_SEND_WARNING, icon: 'none', duration: 2500 })
+					}
+					return isBlocked
+				} catch (error) {
+					// 自己屏蔽对方只提示、不拦截；查询异常也继续发送，由发送接口判断是否被人才屏蔽。
+					console.warn('[PC Chat] 发送前查询黑名单状态失败，继续发送消息', error)
+					return false
+				}
+			},
+			async sendNimMessage(createMessage, draftSnapshot) {
+				// 与消息类型无关的发送入口：统一查询、发送锁、错误码提示和成功回执处理。
+				if (!this._alive || !this.canSendText || typeof createMessage !== 'function') return false
+				if (!this.conversationId || !isNimLoggedIn()) {
+					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					return false
+				}
+				const conversationId = this.conversationId
+				const personAccId = this.personAccId
 				this.isSending = true
 				try {
 					const nim = getNimInstance()
-					const result = await nim.V2NIMMessageService.sendMessage(
-						nim.V2NIMMessageCreator.createTextMessage(text.trim()), conversationId)
-					if (!result || !result.message) throw new Error('消息发送失败')
+					await this.checkOtherBlockedBeforeSend(nim, personAccId)
+					// 查询期间可能切换会话或关闭页面，不能在旧面板查询完成后继续发消息。
+					if (!this._alive || !this.visible || this.opening || !this.accessReady ||
+						this.conversationId !== conversationId || this.personAccId !== personAccId) return false
+					if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪')
+					const result = await nim.V2NIMMessageService.sendMessage(createMessage(nim), conversationId)
+					// 保留失败回执上的 code，让 102426 也能走人才屏蔽提示。
+					if (!result || !result.message) throw result || new Error('消息发送失败')
 					// 即使用户切走了，发送成功也只清除对应会话的原草稿；保留发送期间追加的输入。
 					if (draftSnapshot !== undefined && this.drafts[conversationId] === draftSnapshot) {
 						this.$set(this.drafts, conversationId, '')
 					}
-					if (!this._alive) return true
+					if (!this._alive || this.conversationId !== conversationId || this.personAccId !== personAccId) return true
 					this.mergeMessages([result.message])
 					this.scrollToBottom()
 					this.$emit('changed')
 					return true
 				} catch (error) {
-					if (this._alive) uni.showToast({ title: error.message || '消息发送失败，请重试', icon: 'none' })
+					if (this._alive && this.visible && !this.opening && this.conversationId === conversationId &&
+						this.personAccId === personAccId) uni.showToast({ title: getSendFailureMessage(error), icon: 'none' })
 					return false
 				} finally {
 					if (this._alive) this.isSending = false
 				}
 			},
 			async togglePinned() {
-				if (this.isPinning || !isNimLoggedIn() || this.opening) return
+				if (!this._alive || !this.visible || this.isPinning || this.opening) return
+				if (!this.accessReady) {
+					uni.showToast({ title: this.isCheckingAccess ? '沟通信息加载中，请稍候' : '沟通权限尚未就绪', icon: 'none' })
+					return
+				}
+				if (!this.personAccId || !this.enterpriseAccId) {
+					uni.showToast({ title: '未获取到会话账号信息', icon: 'none' })
+					return
+				}
+				if (!this.conversationId || !isNimLoggedIn()) {
+					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					return
+				}
+				const conversationId = this.conversationId
 				const value = !this.isPinned
 				let saved = false
+				let toastTitle = ''
 				this.isPinning = true
 				try {
-					// 与移动端一致，先保存业务会话置顶状态，再同步云信列表排序。
+					// PC 企业端仍按双方身份传参；先保存业务状态，失败时不调用云信或提前更改界面。
 					const response = await requestApi({ Name: 'Chat.Chat.Save', Content: {
 						PersonAccId: this.personAccId, EnterpriseAccId: this.enterpriseAccId, IsTop: value
 					} })
-					if (!response || Number(response.Code) !== 0) throw new Error('会话置顶失败')
-					const data = typeof response.Data === 'string' ? JSON.parse(response.Data) : response.Data
-					if (data && data.Code !== undefined && Number(data.Code) !== 0) throw new Error('会话置顶失败')
-					saved = true
-					await getNimInstance().V2NIMLocalConversationService.stickTopConversation(this.conversationId, value)
-					if (!this._alive) return
-					this.isPinned = value
-					this.$emit('changed')
-				} catch (error) {
-					if (this._alive) {
-						if (saved) this.isPinned = value
-						uni.showToast({ title: saved ? '置顶已保存，会话列表同步失败' : '会话置顶失败，请重试', icon: 'none' })
+					const responseCode = response && response.Code !== undefined ? Number(response.Code) : NaN
+					if (responseCode !== 0) {
+						if (responseCode === 4400002) throw new Error('置顶数量已达上限')
+						throw new Error(`更新置顶状态失败，业务错误码：${response && response.Code !== undefined ? response.Code : 'unknown'}`)
 					}
+					// Save 可不返回 Data，空字符串同样视为空对象；非空 JSON 必须是合法对象。
+					let data = response.Data
+					if (typeof data === 'string') {
+						try { data = data.trim() ? JSON.parse(data) : {} }
+						catch (error) { throw new Error('保存会话接口返回的数据格式不正确') }
+					}
+					data = data === undefined || data === null ? {} : data
+					if (typeof data !== 'object' || Array.isArray(data)) throw new Error('保存会话接口返回的数据格式不正确')
+					const dataCode = data.Code !== undefined ? Number(data.Code) : 0
+					if (dataCode !== 0) {
+						if (dataCode === 4400002) throw new Error('置顶数量已达上限')
+						throw new Error(`更新置顶状态失败，数据错误码：${data.Code}`)
+					}
+					// 与手机端一致，业务保存后立即刷新按钮和列表；云信同步失败也不回滚已保存的状态。
+					saved = true
+					if (this._alive) {
+						this.isPinned = value
+						this.$emit('pin-changed', { conversationId, isPinned: value })
+					}
+					const conversationService = getNimInstance().V2NIMLocalConversationService
+					if (!conversationService || typeof conversationService.stickTopConversation !== 'function') {
+						throw new Error('当前网易云信 SDK 不支持会话置顶')
+					}
+					// 组件已切换或卸载时仍完成原会话的 SDK 同步，但不再更新其他聊天区或弹出提示。
+					await conversationService.stickTopConversation(conversationId, value)
+					if (this._alive) this.$emit('changed')
+					toastTitle = value ? '会话已置顶' : '已取消置顶'
+				} catch (error) {
+					toastTitle = saved ? '状态已保存，会话列表同步失败' : error && error.message ? error.message : '更新置顶状态失败'
+					console.error('[PC Chat] 更新会话置顶状态失败', error)
 				} finally {
 					if (this._alive) this.isPinning = false
 				}
+				if (this._alive && this.visible && toastTitle) uni.showToast({ title: toastTitle, icon: 'none' })
 			},
 			previewImage(url) {
 				uni.previewImage({ current: url, urls: this.displayMessages.filter(row => row.type === 'image').map(row => row.url) })
@@ -608,6 +920,7 @@
 				this._audioSource = ''
 			},
 			emitAction(key, label) {
+				if (key === 'switch-job') return this.switchJob()
 				// 所有业务操作统一携带当前职位与简历，后续接入页面时无需重新猜测对应关系。
 				this.$emit('action', { key, label, jobId: this.jobId, resumeId: this.resumeId,
 					personAccId: this.personAccId, enterpriseAccId: this.enterpriseAccId, chatByQRcode: this.detail.chatByQRcode })
@@ -618,6 +931,26 @@
 
 <style lang="scss" scoped>
 	.chat-panel { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+	.job-picker-mask { position: fixed; z-index: 20; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center;
+		justify-content: center; background: rgba(0, 0, 0, .28); }
+	.job-picker { box-sizing: border-box; width: min(520px, calc(100vw - 48px)); max-height: min(520px, calc(100vh - 48px));
+		padding: 0 20px 20px; overflow: hidden; background: #fff; border-radius: 4px; box-shadow: 0 8px 28px rgba(0, 0, 0, .18); }
+	.job-picker-header { display: flex; align-items: center; min-height: 58px; border-bottom: 1px solid #edf0f3; }
+	.job-picker-title { flex: 1; min-width: 0; font-size: 16px; color: #30353a; }
+	.job-picker-close { flex: 0 0 28px; width: 28px; height: 28px; padding: 0; margin-left: 12px; border: 0; font-size: 24px;
+		line-height: 26px; color: #9ca4ab; background: transparent; cursor: pointer; }
+	.job-picker-close:hover { color: #4c555d; }
+	.job-picker-state { padding: 36px 0; text-align: center; font-size: 14px; color: #929ba4; }
+	.job-picker-state--error { color: #c65d5d; }
+	.job-picker-empty { display: flex; align-items: center; flex-direction: column; padding: 42px 0 28px; font-size: 14px; color: #7d8790; }
+	.job-publish-button { min-width: 96px; height: 34px; padding: 0 18px; margin-top: 22px; border: 0; border-radius: 3px; font-size: 14px;
+		color: #fff; background: #126bd1; cursor: pointer; }
+	.job-picker-list { max-height: 400px; }
+	.job-picker-item { display: flex; align-items: center; justify-content: space-between; box-sizing: border-box; width: 100%; min-height: 64px;
+		padding: 10px 4px; border: 0; border-bottom: 1px solid #f0f2f4; text-align: left; background: #fff; cursor: pointer; }
+	.job-picker-item:hover { background: #f7faff; }
+	.job-picker-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #333b42; }
+	.job-picker-item-detail { flex: 0 0 auto; max-width: 58%; margin-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #7d8790; }
 	.chat-panel-header { position: relative; display: flex; align-items: center; flex: 0 0 49px; box-sizing: border-box;
 		padding: 0 18px; border-bottom: 1px solid #eceff1; }
 	.job-context { display: flex; align-items: center; max-width: 46%; font-size: 12px; color: #929ba4; }
@@ -686,9 +1019,26 @@
 	.composer-tool--button { width: auto; margin: 0; padding: 0; border: 0; border-radius: 0; line-height: normal;
 		background: transparent; &::after { border: 0; } }
 	.composer-tool--active { color: #0866d9; }
+	.composer-pin { justify-content: flex-start; width: 92px; height: 28px;
+		&[disabled] { color: #a4abb4; cursor: default; }
+		&:focus-visible { outline: 2px solid #2b6cd4; outline-offset: 2px; } }
 	.tool-icon { margin-right: 4px; font-family: Arial, sans-serif; font-size: 19px; }
 	.toolbar-right { display: flex; align-items: center; gap: 16px; margin-left: auto; }
-	.tool-more { font-size: 20px; }
+	.more-menu-trigger { position: relative; display: flex; flex-shrink: 0; }
+	.tool-more { justify-content: center; width: 28px; height: 28px; font-size: 20px;
+		&:focus-visible { outline: 2px solid #2b6cd4; outline-offset: 2px; } }
+	// 将菜单与按钮之间的间距包含在悬停区域内，鼠标移入菜单时不会意外收起。
+	.more-menu-popover { position: absolute; right: 0; bottom: 100%; z-index: 4; width: 116px; padding-bottom: 8px; }
+	.more-menu { position: relative; padding: 4px 0; border: 1px solid #e5e8eb; border-radius: 4px; background: #fff;
+		box-shadow: 0 3px 12px rgba(0, 0, 0, .08);
+		&::after { position: absolute; right: 9px; bottom: -5px; width: 8px; height: 8px; content: '';
+			border-right: 1px solid #e5e8eb; border-bottom: 1px solid #e5e8eb; background: #fff; transform: rotate(45deg); } }
+	.more-menu-item { display: block; box-sizing: border-box; width: 100%; height: 36px; margin: 0; padding: 0 16px;
+		border: 0; border-radius: 0; font-size: 13px; line-height: 36px; text-align: left; color: #65717b;
+		background: transparent; cursor: pointer; &::after { border: 0; }
+		&:hover { color: #0866d9; background: #f5f8fc; }
+		&[disabled] { color: #a4abb4; background: transparent; cursor: default; }
+		&:focus-visible { outline: 2px solid #2b6cd4; outline-offset: -2px; } }
 	.composer-input-row { padding: 0 15px 12px 24px; }
 	.composer-input { display: block; box-sizing: border-box; width: 100%; height: 60px; min-height: 60px; padding: 0;
 		border: 0; outline: 0; resize: none; font-family: inherit; font-size: 14px; line-height: 22px; color: #333;

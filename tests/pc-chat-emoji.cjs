@@ -19,6 +19,7 @@ const panelSource = fs.readFileSync(path.join(root, 'components/pc-chat-panel/pc
 function environment() {
   const toasts = [], sends = []
   const nim = {
+    V2NIMUserService: { checkBlock: async accounts => ({ [accounts[0]]: false }) },
     V2NIMMessageCreator: { createTextMessage: text => ({ text }) },
     V2NIMMessageService: { sendMessage: async (message, id) => {
       sends.push({ text: message.text, conversationId: id })
