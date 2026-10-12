@@ -54,15 +54,48 @@
 						</view>
 					</view>
 					<view v-else :id="messageAnchor(message.id)" :key="message.id" class="message-row"
-						:class="message.direction">
-						<image :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
+						:class="[message.direction, { 'message-row--job-card': message.type === 'job-card' }]">
+						<image v-if="message.type !== 'job-card'" :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
 							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
 						<view class="message-bubble"
-							:class="{ 'message-bubble--image': message.type === 'image', 'message-bubble--audio': message.type === 'audio' }"
+							:class="{ 'message-bubble--image': message.type === 'image', 'message-bubble--audio': message.type === 'audio', 'message-bubble--job-card': message.type === 'job-card' }"
 							:style="message.type === 'audio' ? { width: audioBubbleWidth(message) } : null"
 							@click.stop="message.type === 'audio' && playAudioMessage(message)"
 							@longpress.stop.prevent="isTextMessage(message) && handleMessageLongPress(message)">
-							<image v-if="message.type === 'image'" :src="message.url" class="message-image"
+							<!-- status 有值时保留彩色和薪资，否则整张卡片置灰并显示已失效。 -->
+							<view v-if="message.type === 'job-card'" class="job-message-card"
+								:style="{ filter: message.job.status ? 'grayscale(0)' : 'grayscale(1)' }"
+								@click.stop="handleJobCardClick(message)">
+								<view class="job-message-heading">
+									<text class="job-message-name">{{ message.job.JobName || '职位信息' }}</text>
+									<text class="job-message-salary">{{ message.job.status ? message.job.Salary : '已失效' }}</text>
+								</view>
+								<text v-if="message.job.CompanyName" class="job-message-company">{{ message.job.CompanyName }}</text>
+								<view v-if="message.job.Location || message.job.Experience || message.job.Education" class="job-message-requirements">
+									<view v-if="message.job.Location" class="job-message-requirement">
+										<image src="../../../static/icon_location.png" class="job-message-icon" mode="aspectFit"></image>
+										<text>{{ message.job.Location }}</text>
+									</view>
+									<view v-if="message.job.Experience" class="job-message-requirement">
+										<image src="../../../static/icon_work.png" class="job-message-icon" mode="aspectFit"></image>
+										<text>{{ message.job.Experience }}</text>
+									</view>
+									<view v-if="message.job.Education" class="job-message-requirement">
+										<image src="../../../static/icon_edu.png" class="job-message-icon" mode="aspectFit"></image>
+										<text>{{ message.job.Education }}</text>
+									</view>
+								</view>
+								<view v-if="message.job.Logo || message.job.EnterpriseManager || message.job.EnterpriseManagerPost"
+									class="job-message-manager">
+									<image :src="failedJobLogoIds.includes(message.id) ? defaultEnterpriseLogo : (message.job.Logo || defaultEnterpriseLogo)" class="job-message-logo"
+										mode="aspectFit" @error="handleJobLogoError(message)"></image>
+									<text v-if="message.job.EnterpriseManager" class="job-message-manager-name">{{ message.job.EnterpriseManager }}</text>
+									<text v-if="message.job.EnterpriseManagerPost" class="job-message-manager-post">{{ message.job.EnterpriseManagerPost }}</text>
+								</view>
+								<!-- 卡片底部直接展示 EnterpriseTime，不额外拼接提示内容。 -->
+								<view v-if="message.job.EnterpriseTime" class="job-message-tip">{{ message.job.EnterpriseTime }}</view>
+							</view>
+							<image v-else-if="message.type === 'image'" :src="message.url" class="message-image"
 								mode="widthFix" @click.stop="previewImage(message.url)"></image>
 							<view v-else-if="message.type === 'audio'" class="audio-message-content">
 								<text class="audio-message-icon">{{ audioPlayingId === message.id ? '❚❚' : '▶' }}</text>
@@ -271,6 +304,8 @@
 	} from '../../../services/nim-emoji'
 
 	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
+	const CHAT_BUTTON_API = 'Chat.ChatButton.Get'
+	const CHANGE_CHAT_JOB_API = 'Chat.Chat.ChangeJob'
 	const CHAT_SAVE_API = 'Chat.Chat.Save'
 	const CHECK_SEND_RESUME_API = 'Chat.Person.CheckSendResume'
 	const GET_SEND_RESUME_JOB_API = 'Chat.Chat.GetJob'
@@ -327,6 +362,46 @@
 		} catch (error) {
 			throw new Error(errorMessage)
 		}
+	}
+
+	function parseCustomMessagePayload(message) {
+		const rawAttachment = message && message.attachment
+		const attachment = rawAttachment && typeof rawAttachment === 'object' ? rawAttachment : {}
+		const candidates = [attachment.raw, rawAttachment, message && message.text]
+
+		for (const candidate of candidates) {
+			if (!candidate) continue
+			if (typeof candidate === 'object') {
+				if (candidate.type !== undefined) return candidate
+				continue
+			}
+			if (typeof candidate !== 'string') continue
+
+			try {
+				const parsed = JSON.parse(candidate)
+				if (parsed && typeof parsed === 'object' && parsed.type !== undefined) return parsed
+			} catch (error) {
+				// 自定义消息也可能包含普通文本，不能因此影响其它消息的正常展示。
+			}
+		}
+
+		return null
+	}
+
+	function parseJobMessageData(data) {
+		// type=4 的 data 是 Limits.Message（可能为包含 Enterprise 的 JSON 字符串），type=5 为 Enterprise 对象。
+		let parsed = data
+		if (typeof parsed === 'string') {
+			try {
+				parsed = JSON.parse(parsed)
+			} catch (error) {
+				return null
+			}
+		}
+		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+
+		const job = parsed.Enterprise !== undefined ? parsed.Enterprise : parsed
+		return job && typeof job === 'object' && !Array.isArray(job) && (job.JobId || job.JobName) ? job : null
 	}
 
 	function getErrorCode(error) {
@@ -537,6 +612,22 @@
 				content: message.text || MESSAGE_TYPE_LABELS[messageType]
 			}
 		}
+		if (messageType === 100) {
+			// 仅把云信自定义消息中的业务 type=4/5 渲染为职位卡片，不影响 SDK 的原生消息类型。
+			const customPayload = parseCustomMessagePayload(message)
+			const customType = Number(customPayload && customPayload.type)
+			if (customType === 4 || customType === 5) {
+				const job = parseJobMessageData(customPayload.data)
+				if (job) {
+					return {
+						...base,
+						type: 'job-card',
+						customType,
+						job
+					}
+				}
+			}
+		}
 
 		let content = MESSAGE_TYPE_LABELS[messageType] || '[暂不支持的消息]'
 		if (messageType === 2 && attachment.duration) {
@@ -560,6 +651,8 @@
 				resumeId: '',
 				personAccId: '',
 				enterpriseAccId: '',
+				defaultEnterpriseLogo: DEFAULT_AVATAR,
+				failedJobLogoIds: [],
 				conversationId: '',
 				selfUserInfo: null,
 				selfAvatar: DEFAULT_AVATAR,
@@ -613,6 +706,7 @@
 				scrollIntoView: '',
 				scrollWithAnimation: false,
 				isCheckingLimits: false,
+				isSwitchingChatJob: false,
 				isWaitingForNim: false,
 				isLoadingHistory: false,
 				historyExhausted: false,
@@ -710,6 +804,7 @@
 		},
 		onUnload() {
 			this._chatPageAlive = false
+			this._pendingChatGreeting = null
 			// 离开聊天页后恢复消息列表页的其它会话红点判断。
 			clearActiveConversationId(this.conversationId)
 			this.abortVoiceRecording()
@@ -734,7 +829,13 @@
 			},
 			handleNimLoginStatus(status) {
 				if (Number(status) !== 1 || !this.enterpriseAccId) return
-				this.prepareNimConversation()
+				Promise.resolve(this.prepareNimConversation())
+					.then(() => this.sendPendingChatGreeting())
+					.catch(error => {
+						if (!this._chatPageAlive) return
+						this.historyLoadError = error && error.message ? error.message : '发送默认招呼语失败'
+						console.error('[Chat] 发送默认招呼语失败', error)
+					})
 			},
 			handleNimLoginFailed(error) {
 				if (!this.enterpriseAccId || this.conversationId) return
@@ -792,6 +893,33 @@
 						return
 					}
 
+					// Limits 返回的职位是当前会话的实际职位；与页面职位不一致时，先询问是否切换。
+					const returnedJobId = data.JobId !== undefined ? data.JobId : response.JobId
+					const normalizedReturnedJobId = returnedJobId === undefined || returnedJobId === null ?
+						'' : String(returnedJobId).trim()
+					const normalizedCurrentJobId = this.jobId === undefined || this.jobId === null ?
+						'' : String(this.jobId).trim()
+					if (normalizedReturnedJobId && normalizedCurrentJobId &&
+						normalizedReturnedJobId !== normalizedCurrentJobId) {
+						const returnedEnterpriseAccId = data.EnterpriseAccId !== undefined ?
+							data.EnterpriseAccId : response.EnterpriseAccId
+						uni.showModal({
+							title: '提示',
+							content: '当前聊天职位与页面职位不一致，是否切换聊天职位？',
+							confirmText: '立即切换',
+							success: result => {
+								if (result && result.confirm) {
+									// 切换目标是当前页面职位，而不是 Limits 返回的旧聊天职位。
+									this.changeChatJob(normalizedCurrentJobId, returnedEnterpriseAccId)
+								}
+							}
+						})
+						return
+					}
+
+					// 职位一致且 Limits 返回了 Message 时，获取默认招呼语并按约定发送两条云信消息。
+					const limitsMessage = data.Message !== undefined ? data.Message : response.Message
+
 					const enterpriseAccId = data.EnterpriseAccId !== undefined ?
 						data.EnterpriseAccId :
 						response.EnterpriseAccId
@@ -802,13 +930,170 @@
 						throw new Error('获取沟通状态失败：未返回 EnterpriseAccId')
 					}
 
+					const hasLimitsMessage = typeof limitsMessage === 'string' ?
+						limitsMessage.trim().length > 0 :
+						limitsMessage !== undefined && limitsMessage !== null
+					if (normalizedReturnedJobId === normalizedCurrentJobId && hasLimitsMessage) {
+						try {
+							await this.loadChatGreeting(limitsMessage, normalizedCurrentJobId)
+						} catch (error) {
+							// 招呼语属于会话初始化后的附加消息，接口失败不阻断历史消息加载。
+							uni.showToast({
+								title: error && error.message ? error.message : '默认招呼语加载失败',
+								icon: 'none'
+							})
+							console.error('[Chat] 获取默认招呼语失败', error)
+						}
+					}
 					await this.prepareNimConversation()
+					await this.sendPendingChatGreeting()
 				} catch (error) {
 					if (!this._chatPageAlive) return
 					this.historyLoadError = error && error.message ? error.message : '聊天加载失败'
 					console.error('[Chat] 获取聊天权限失败', error)
 				} finally {
 					if (this._chatPageAlive) this.isCheckingLimits = false
+				}
+			},
+			async loadChatGreeting(limitsMessage, jobId) {
+				const response = await requestApi({
+					Name: CHAT_BUTTON_API,
+					Content: {
+						JobId: jobId
+					}
+				})
+				if (!response || Number(response.Code) !== 0) {
+					const code = response && response.Code !== undefined ? response.Code : 'unknown'
+					throw new Error(`获取默认招呼语失败，业务错误码：${code}`)
+				}
+
+				const data = parseResponseData(response.Data, '默认招呼语接口返回的数据格式不正确')
+				if (data.Code !== undefined && Number(data.Code) !== 0) {
+					throw new Error(`获取默认招呼语失败，数据错误码：${data.Code}`)
+				}
+				const greetings = data.Greetings !== undefined ? data.Greetings : response.Greetings
+				const greetingText = greetings === undefined || greetings === null ? '' : String(greetings)
+
+				// 接口成功后暂存发送内容；若云信尚在登录，登录成功事件会继续发送且不会重载消息。
+				this._pendingChatGreeting = {
+					limitsMessage,
+					greetingText,
+					customSent: false
+				}
+			},
+			async sendPendingChatGreeting() {
+				if (!this._pendingChatGreeting || !isNimLoggedIn() || !this.conversationId) return
+				if (this._chatGreetingSendPromise) return this._chatGreetingSendPromise
+
+				this._chatGreetingSendPromise = (async () => {
+					const pendingGreeting = this._pendingChatGreeting
+					const nim = getNimInstance()
+					const messageService = nim.V2NIMMessageService
+					const messageCreator = nim.V2NIMMessageCreator
+					if (!messageService || typeof messageService.sendMessage !== 'function' ||
+						!messageCreator || typeof messageCreator.createCustomMessage !== 'function' ||
+						typeof messageCreator.createTextMessage !== 'function') {
+						throw new Error('当前聊天服务不支持发送招呼语消息')
+					}
+
+					// 招呼语流程：先发送 { type: 4, data: Limits.Message } 自定义消息，再发送 Greetings 文本消息。
+					if (!pendingGreeting.customSent) {
+						const customMessage = messageCreator.createCustomMessage('', JSON.stringify({
+							type: 4,
+							data: pendingGreeting.limitsMessage
+						}))
+						const customResult = await messageService.sendMessage(customMessage, this.conversationId)
+						if (!customResult || !customResult.message) {
+							throw new Error('招呼语自定义消息发送失败：SDK 未返回消息')
+						}
+						pendingGreeting.customSent = true
+						this.mergeMessages([customResult.message])
+					}
+
+					const textMessage = messageCreator.createTextMessage(pendingGreeting.greetingText)
+					const textResult = await messageService.sendMessage(textMessage, this.conversationId)
+					if (!textResult || !textResult.message) throw new Error('默认招呼语文本发送失败：SDK 未返回消息')
+					this.mergeMessages([textResult.message])
+					this._pendingChatGreeting = null
+					this.$nextTick(() => this.scrollToBottom(true))
+				})().finally(() => {
+					this._chatGreetingSendPromise = null
+				})
+
+				return this._chatGreetingSendPromise
+			},
+			async changeChatJob(jobId, enterpriseAccId) {
+				if (this.isSwitchingChatJob) return
+
+				const targetJobId = jobId === undefined || jobId === null ? '' : String(jobId).trim()
+				const targetEnterpriseAccId = enterpriseAccId === undefined || enterpriseAccId === null ?
+					this.enterpriseAccId : String(enterpriseAccId).trim()
+				if (!targetJobId || !this.personAccId || !targetEnterpriseAccId) {
+					uni.showToast({ title: '缺少切换聊天职位所需信息', icon: 'none' })
+					return
+				}
+
+				this.isSwitchingChatJob = true
+				uni.showLoading({ title: '切换中', mask: true })
+				try {
+					const response = await requestApi({
+						Name: CHANGE_CHAT_JOB_API,
+						Content: {
+							PersonAccId: this.personAccId,
+							EnterpriseAccId: targetEnterpriseAccId,
+							JobId: targetJobId,
+							IsMessage: true
+						}
+					})
+					if (!response || Number(response.Code) !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`切换聊天职位失败，业务错误码：${code}`)
+					}
+
+					const data = parseResponseData(response.Data, '职位切换接口返回的数据格式不正确')
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error(`切换聊天职位失败，数据错误码：${data.Code}`)
+					}
+					const enterprise = data.Enterprise !== undefined ? data.Enterprise : response.Enterprise
+					if (!enterprise || typeof enterprise !== 'object') {
+						throw new Error('切换聊天职位失败：未返回 Enterprise')
+					}
+
+					this.jobId = targetJobId
+					this.enterpriseAccId = targetEnterpriseAccId
+
+					// 切换职位只发送职位变更自定义消息，不重新拉取或刷新历史消息。
+					if (!isNimLoggedIn()) {
+						throw new Error('聊天服务尚未就绪，职位已切换，请稍后重试')
+					}
+
+					const nim = getNimInstance()
+					if (!this.conversationId) {
+						this.conversationId = nim.V2NIMConversationIdUtil.p2pConversationId(targetEnterpriseAccId)
+					}
+					const messageService = nim.V2NIMMessageService
+					if (!messageService || typeof messageService.sendMessage !== 'function' ||
+						!nim.V2NIMMessageCreator || typeof nim.V2NIMMessageCreator.createCustomMessage !== 'function') {
+						throw new Error('当前聊天服务不支持发送自定义消息')
+					}
+
+					// 职位切换成功后发送自定义消息，消息体固定为 { type: 5, data: Enterprise }。
+					const customMessageBody = { type: 5, data: enterprise }
+					const message = nim.V2NIMMessageCreator.createCustomMessage('', JSON.stringify(customMessageBody))
+					const result = await messageService.sendMessage(message, this.conversationId)
+					if (!result || !result.message) throw new Error('自定义消息发送失败：SDK 未返回消息')
+
+					this.mergeMessages([result.message])
+					this.$nextTick(() => this.scrollToBottom(true))
+				} catch (error) {
+					uni.showToast({
+						title: error && error.message ? error.message : '切换聊天职位失败',
+						icon: 'none'
+					})
+					console.error('[Chat] 切换聊天职位失败', error)
+				} finally {
+					uni.hideLoading()
+					this.isSwitchingChatJob = false
 				}
 			},
 			async loadSendResumeStatus() {
@@ -972,6 +1257,19 @@
 					return
 				}
 				this.otherAvatar = DEFAULT_AVATAR
+			},
+			handleJobCardClick(message) {
+				// 失效职位不触发业务事件；有效卡片将当前消息中的职位信息交给业务层。
+				if (!message || message.type !== 'job-card' || !message.job || !message.job.status) return
+				uni.$emit('chat:job-card-click', {
+					jobId: message.job.JobId,
+					job: message.job
+				})
+			},
+			handleJobLogoError(message) {
+				// 使用页面响应式状态切换兜底图，保留原始消息，并避免兜底图失败时反复触发更新。
+				if (!message || this.failedJobLogoIds.includes(message.id)) return
+				this.failedJobLogoIds.push(message.id)
 			},
 			bindMessageEvents() {
 				if (this._messageEventsBound) return
@@ -3277,6 +3575,137 @@
 				color: #686868;
 			}
 		}
+	}
+
+	.message-row.message-row--job-card {
+		.message-bubble--job-card {
+			width: 100%;
+			max-width: 100%;
+			min-height: 0;
+			padding: 0;
+			background: transparent;
+			border-radius: 0;
+			color: #303236;
+			overflow: visible;
+		}
+	}
+
+	.job-message-card {
+		box-sizing: border-box;
+		width: 100%;
+		padding: 26rpx 26rpx 22rpx;
+		background: #ffffff;
+		border-radius: 2rpx;
+		box-shadow: 0 1rpx 4rpx rgba(30, 45, 56, 0.03);
+		color: #303236;
+	}
+
+	.job-message-heading {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 20rpx;
+	}
+
+	.job-message-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		font-size: 34rpx;
+		font-weight: 500;
+		line-height: 1.3;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.job-message-salary {
+		flex-shrink: 0;
+		font-size: 30rpx;
+		line-height: 1.3;
+		color: #ff5c16;
+	}
+
+	.job-message-company {
+		display: block;
+		margin-top: 18rpx;
+		overflow: hidden;
+		font-size: 26rpx;
+		line-height: 1.4;
+		color: #777a7e;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.job-message-requirements {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 20rpx;
+		margin-top: 20rpx;
+	}
+
+	.job-message-requirement {
+		display: inline-flex;
+		align-items: center;
+		max-width: 100%;
+		font-size: 24rpx;
+		line-height: 1.4;
+		color: #686c70;
+		white-space: nowrap;
+	}
+
+	.job-message-icon {
+		flex-shrink: 0;
+		width: 24rpx;
+		height: 24rpx;
+		margin-right: 8rpx;
+		opacity: 0.72;
+	}
+
+	.job-message-manager {
+		display: flex;
+		align-items: center;
+		min-height: 48rpx;
+		margin-top: 20rpx;
+	}
+
+	.job-message-logo {
+		flex: 0 0 48rpx;
+		width: 48rpx;
+		height: 48rpx;
+		margin-right: 12rpx;
+		border-radius: 2rpx;
+		background: #f1f3f5;
+	}
+
+	.job-message-manager-name {
+		max-width: 48%;
+		overflow: hidden;
+		font-size: 28rpx;
+		line-height: 1.4;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.job-message-manager-post {
+		margin-left: 10rpx;
+		overflow: hidden;
+		font-size: 28rpx;
+		line-height: 1.4;
+		color: #3c3f42;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.job-message-tip {
+		margin-top: 18rpx;
+		padding-top: 18rpx;
+		border-top: 1rpx solid #eeeeee;
+		font-size: 22rpx;
+		line-height: 1.45;
+		color: #a0a4a8;
+		white-space: pre-wrap;
+		word-break: break-all;
 	}
 
 	.message-bottom {
