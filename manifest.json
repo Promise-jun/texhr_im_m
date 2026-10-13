@@ -89,7 +89,8 @@
 			"disableHostCheck" : true,
             "proxy" : {
                 "/api" : {
-                    "target" : "https://openapi.texhr.cn/",
+                    // "target" : "https://openapi.texhr.cn/",
+                    "target" : "http://demo-openapi.texhr.cn:65101/",
                     "changeOrigin" : true,
                     "secure" : false,
                     "pathRewrite" : {

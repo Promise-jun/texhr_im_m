@@ -35,8 +35,28 @@
 				<template v-for="message in displayMessages">
 					<view v-if="message.type === 'time' || message.type === 'system'" :key="message.id"
 						class="time-divider">{{ message.content }}</view>
-					<view v-else :id="message.anchor" :key="message.id" class="message-row" :class="message.direction">
-						<image :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
+					<view v-else :id="message.anchor" :key="message.id" class="message-row"
+						:class="[message.direction, { 'message-row--person-card': message.type === 'person-card' }]">
+						<!-- type=4 的 Person 卡片为完整信息块，不展示聊天头像和气泡。 -->
+						<view v-if="message.type === 'person-card'" class="person-message-card">
+							<text class="person-message-name">{{ message.person.name }}</text>
+							<view v-if="message.person.meta.length" class="person-message-meta">
+								<text v-for="(item, index) in message.person.meta" :key="index" class="person-message-meta-item">{{ item }}</text>
+							</view>
+							<view v-if="message.person.jobName || message.person.location" class="person-message-intention">
+								<view v-if="message.person.jobName" class="person-message-intention-item">
+									<!-- 复用项目已有的职位 icon：static/pc/icon_job.png。 -->
+									<image src="/static/pc/icon_job.png" class="person-message-icon" mode="aspectFit"></image>
+									<text>{{ message.person.jobName }}</text>
+								</view>
+								<view v-if="message.person.location" class="person-message-intention-item">
+									<!-- 复用项目已有的地点 icon：static/pc/icon_location.png。 -->
+									<image src="/static/pc/icon_location.png" class="person-message-icon" mode="aspectFit"></image>
+									<text>{{ message.person.location }}</text>
+								</view>
+							</view>
+						</view>
+						<image v-else :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
 							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
 						<view v-if="message.type === 'image'" class="message-bubble message-bubble--image"
 							@click="previewImage(message.url)">
@@ -54,7 +74,7 @@
 								aria-hidden="true"><view v-for="bar in 5" :key="bar" class="audio-wave-bar"></view></view>
 							<text class="audio-duration">{{ message.durationSeconds ? message.durationSeconds + '"' : '--"' }}</text>
 						</button>
-						<view v-else class="message-bubble message-bubble--text">
+						<view v-else-if="message.type !== 'person-card'" class="message-bubble message-bubble--text">
 							<view class="message-text">
 								<block v-for="(segment, segmentIndex) in message.segments" :key="segmentIndex">
 									<image v-if="segment.type === 'emoji'" :src="segment.url" :aria-label="segment.key"
@@ -71,25 +91,25 @@
 
 		<view class="composer">
 			<view class="composer-toolbar">
-				<text class="composer-tool" @click.stop="toggleEmojiPanel"><text class="tool-icon">☺</text> 表情</text>
+				<text class="composer-tool" @click.stop="toggleEmojiPanel"><image src="/static/pc/icon_emoji.png" class="tool-icon"></image> 表情</text>
 				<button class="composer-tool composer-tool--button" :class="{ 'composer-tool--active': phrasesVisible }"
 					:aria-expanded="phrasesVisible ? 'true' : 'false'" @click.stop="togglePhrasePanel">
-					<text class="tool-icon">◎</text> 常用语
+					<image src="/static/pc/icon_common.png" class="tool-icon"></image> 常用语
 				</button>
-				<text class="composer-tool" @click="emitAction('interview', '面试邀请')"><text class="tool-icon">▣</text> 面试邀请</text>
+				<text class="composer-tool" @click="emitAction('interview', '面试邀请')"><image src="/static/pc/icon_msyq.png" class="tool-icon"></image> 面试邀请</text>
 				<!-- <text class="composer-tool" @click="emitAction('mobile', '手机聊天')"><text class="tool-icon">▦</text> 手机聊天</text> -->
 				<view class="toolbar-right">
-					<text class="composer-tool" @click="emitAction('unsuitable', '不合适')"><text class="tool-icon">⊗</text> 不合适</text>
+					<text class="composer-tool" @click="emitAction('unsuitable', '不合适')"><image src="/static/pc/icon_bhs.png" class="tool-icon"></image> 不合适</text>
 					<!-- 权限校验完成后才可置顶；保存期间禁用入口，避免连续点击重复提交。 -->
 					<button class="composer-tool composer-tool--button composer-pin" :class="{ 'composer-tool--active': isPinned }"
 						:disabled="isPinning || !accessReady || opening" :aria-busy="isPinning ? 'true' : 'false'"
 						:aria-pressed="isPinned ? 'true' : 'false'" :title="isPinned ? '取消置顶' : '置顶'" @click="togglePinned">
-						<text class="tool-icon">↥</text> {{ isPinning ? '保存中...' : isPinned ? '取消置顶' : '置顶' }}
+						<image src="/static/pc/icon_top.png" class="tool-icon"></image> {{ isPinning ? '保存中...' : isPinned ? '取消置顶' : '置顶' }}
 					</button>
 					<view class="more-menu-trigger" @mouseenter="openMoreMenu" @mouseleave="moreMenuVisible = false"
 						@focusin="openMoreMenu" @focusout="handleMoreMenuBlur" @click.stop>
 						<button class="composer-tool composer-tool--button tool-more" aria-label="更多操作"
-							aria-haspopup="true" :aria-expanded="moreMenuVisible ? 'true' : 'false'" @click="openMoreMenu">···</button>
+							aria-haspopup="true" :aria-expanded="moreMenuVisible ? 'true' : 'false'" @click="openMoreMenu"><image src="/static/pc/icon_more.png" class="tool-icon"></image></button>
 						<view v-if="moreMenuVisible" class="more-menu-popover">
 							<view class="more-menu">
 								<!-- 黑名单状态来自云信；查询和保存期间禁用，避免按旧状态执行反向操作。 -->
@@ -224,6 +244,78 @@
 		return ''
 	}
 
+	function parseCustomMessagePayload(message) {
+		const rawAttachment = message && message.attachment
+		const attachment = rawAttachment && typeof rawAttachment === 'object' ? rawAttachment : {}
+		const candidates = [attachment.raw, rawAttachment, message && message.text]
+
+		for (const candidate of candidates) {
+			if (!candidate) continue
+			if (typeof candidate === 'object') {
+				if (candidate.type !== undefined) return candidate
+				continue
+			}
+			if (typeof candidate !== 'string') continue
+
+			try {
+				const parsed = JSON.parse(candidate)
+				if (parsed && typeof parsed === 'object' && parsed.type !== undefined) return parsed
+			} catch (error) {
+				// 自定义消息的正文不一定是 JSON，解析失败时保留原有的文本兜底展示。
+			}
+		}
+
+		return null
+	}
+
+	function parseObject(value) {
+		if (typeof value === 'string') {
+			try {
+				value = JSON.parse(value)
+			} catch (error) {
+				return null
+			}
+		}
+		return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+	}
+
+	function formatPersonGender(value) {
+		const normalized = String(value === undefined || value === null ? '' : value).trim().toLowerCase()
+		if (normalized === '1' || normalized === '男' || normalized === 'male' || normalized === 'm') return '男'
+		if (normalized === '2' || normalized === '女' || normalized === 'female' || normalized === 'f') return '女'
+		return ''
+	}
+
+	function formatPersonAge(value) {
+		const age = String(value === undefined || value === null ? '' : value).trim()
+		if (!age) return ''
+		return /^\d+$/.test(age) ? `${age}岁` : age
+	}
+
+	function parsePersonMessageData(data) {
+		const payload = parseObject(data)
+		const person = payload && parseObject(payload.Person)
+		if (!person) return null
+
+		const name = responseValue(person, ['PersonName', 'RealName', 'Name', 'NickName', 'UserName'])
+		const meta = [
+			formatPersonGender(responseValue(person, ['Gender', 'GenderName', 'Sex', 'SexName'])),
+			formatPersonAge(responseValue(person, ['Age', 'PersonAge'])),
+			responseValue(person, ['Education', 'EducationName', 'EducationalBackground', 'Degree', 'EduName']),
+			responseValue(person, ['Experience', 'WorkExperience', 'WorkYears', 'WorkingYears', 'WorkYear', 'WorkExperienceName'])
+		].filter(Boolean)
+		const jobName = responseValue(person, ['Post', 'JobName', 'Job', 'ExpectedJob', 'ExpectJob', 'Position', 'PositionName', 'IntentionalPosition', 'IntendedPosition', 'JobIntention', 'IntentionJob'])
+		const location = responseValue(person, ['Location', 'City', 'Address', 'AddressName', 'ExpectedLocation', 'ExpectLocation', 'JobLocation', 'WorkLocation', 'WorkCity', 'Area', 'IntentionCity'])
+		if (!name && !meta.length && !jobName && !location) return null
+
+		return {
+			name: name || '人才信息',
+			meta,
+			jobName,
+			location
+		}
+	}
+
 	export default {
 		name: 'PcChatPanel',
 		props: {
@@ -277,6 +369,7 @@
 			displayMessages() {
 				const rows = []
 				let previousTime = 0
+				console.log(111, this.messages)
 				this.messages.forEach(message => {
 					const id = messageId(message)
 					const timestamp = Number(message.createTime) || 0
@@ -289,15 +382,19 @@
 					const attachment = message.attachment || {}
 					const revoked = Boolean(message.isRevoked)
 					const durationSeconds = this.audioDurations[id] || audioDurationSeconds(attachment.duration)
+					const customPayload = type === 100 ? parseCustomMessagePayload(message) : null
+					const person = !revoked && Number(customPayload && customPayload.type) === 4 ?
+						parsePersonMessageData(customPayload.data) : null
 					const content = revoked ? '消息已撤回' : type === 0 || type === 10 ? message.text || '[消息]'
 						: type === 6 && attachment.name ? `[文件] ${attachment.name}` : MESSAGE_LABELS[type] || '[暂不支持的消息]'
 					rows.push({
 						id, anchor: this.messageAnchor(id),
 						direction: message.isSelf || message.senderId === this.enterpriseAccId ? 'self' : 'other',
-						type: revoked || type === 10 ? 'system' : type === 2 ? 'audio' : type === 1 && attachment.url ? 'image' : 'text',
+						// PC 端自定义 type=4 使用 Person 字段渲染人才信息卡片。
+						type: revoked || type === 10 ? 'system' : person ? 'person-card' : type === 2 ? 'audio' : type === 1 && attachment.url ? 'image' : 'text',
 						url: attachment.url || '',
 						durationSeconds, audioWidth: audioBubbleWidth(durationSeconds), mimeType: getAudioMimeType(attachment),
-						content,
+						content, person,
 						// 文本和兼容性提示都走同一解析器，未知 [xxx] 会原样显示。
 						segments: parseNimEmojiText(content)
 					})
@@ -975,7 +1072,20 @@
 		&.self { flex-direction: row-reverse;
 			.message-avatar { margin: 0 0 0 14px; }
 			.message-bubble { background: #e8f3ff; }
-			.message-bubble::before { left: auto; right: -6px; border-left: 6px solid #e8f3ff; border-right: 0; } } }
+		.message-bubble::before { left: auto; right: -6px; border-left: 6px solid #e8f3ff; border-right: 0; } } }
+	.message-row--person-card { display: block; }
+	.person-message-card { box-sizing: border-box; width: 100%; min-height: 102px; padding: 16px 14px;
+		border: 1px solid #f1f2f3; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .05); }
+	.person-message-name { display: block; overflow: hidden; font-size: 16px; line-height: 24px; color: #0866d9;
+		text-overflow: ellipsis; white-space: nowrap; }
+	.person-message-meta, .person-message-intention { display: flex; align-items: center; flex-wrap: wrap; min-width: 0;
+		font-size: 14px; line-height: 22px; color: #65717b; }
+	.person-message-meta { margin-top: 4px; }
+	.person-message-meta-item { display: inline-flex; align-items: center; white-space: nowrap;
+		& + .person-message-meta-item { margin-left: 10px; padding-left: 10px; border-left: 1px solid #e5e8eb; } }
+	.person-message-intention { gap: 18px; margin-top: 4px; }
+	.person-message-intention-item { display: inline-flex; align-items: center; min-width: 0; white-space: nowrap; }
+	.person-message-icon { flex: 0 0 15px; width: 15px; height: 15px; margin-right: 5px; opacity: .7; }
 	.message-avatar { flex: 0 0 44px; width: 44px; height: 44px; margin-right: 14px; border-radius: 50%; }
 	.message-bubble { position: relative; box-sizing: border-box; max-width: 66%; min-height: 42px;
 		margin-top: 4px; padding: 11px 16px; border-radius: 4px; font-size: 14px; line-height: 21px;
@@ -1022,7 +1132,7 @@
 	.composer-pin { justify-content: flex-start; width: 92px; height: 28px;
 		&[disabled] { color: #a4abb4; cursor: default; }
 		&:focus-visible { outline: 2px solid #2b6cd4; outline-offset: 2px; } }
-	.tool-icon { margin-right: 4px; font-family: Arial, sans-serif; font-size: 19px; }
+	.tool-icon { margin-right: 4px; width: 18px; height: 18px; float: left; }
 	.toolbar-right { display: flex; align-items: center; gap: 16px; margin-left: auto; }
 	.more-menu-trigger { position: relative; display: flex; flex-shrink: 0; }
 	.tool-more { justify-content: center; width: 28px; height: 28px; font-size: 20px;

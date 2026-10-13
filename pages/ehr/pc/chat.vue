@@ -9,7 +9,7 @@
 					</view>
 				</view>
 				<view class="service-phone">
-					<text class="phone-icon">☎</text>
+					<image src="/static/pc/icon_phone.png" class="phone-icon"></image>
 					<text>400-672-6626</text>
 				</view>
 			</view>
@@ -495,10 +495,9 @@
 
 	.phone-icon {
 		display: inline-block;
-		margin-right: 7px;
-		font-size: 15px;
-		line-height: 1;
-		transform: rotate(-18deg);
+		margin-right: 5px;
+		width: 18px;
+		height: 18px;
 	}
 
 	.chat-workspace {
