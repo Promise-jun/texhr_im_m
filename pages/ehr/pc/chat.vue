@@ -62,7 +62,7 @@
 
 				<view class="chat-content">
 					<!-- 只有业务接口成功后才创建聊天组件，显式传入职位、简历及双方云信账号。 -->
-					<pc-chat-panel v-if="chatDetail && activeMainTab === 'recent'" :key="chatDetail.conversationId + '-' + chatDetail.jobId"
+					<pc-chat-panel v-if="chatDetail && activeMainTab === 'recent'" :key="chatDetail.conversationId"
 						:conversation="activeConversation" :job-id="chatDetail.jobId" :resume-id="chatDetail.resumeId"
 						:person-acc-id="chatDetail.personAccId" :enterprise-acc-id="chatDetail.enterpriseAccId"
 						:detail="chatDetail" :drafts="conversationDrafts" :visible="pageVisible"
@@ -386,6 +386,8 @@
 					this.chatDetail = {
 						conversationId: conversation.id, conversation, jobId, resumeId, personAccId, enterpriseAccId,
 						jobName: data.JobName === undefined || data.JobName === null ? '' : String(data.JobName),
+						jobLocation: data.Location === undefined || data.Location === null ? '' : String(data.Location),
+						jobSalary: data.Salary === undefined || data.Salary === null ? '' : String(data.Salary),
 						isPinned: isTop === undefined ? Boolean(conversation.stickTop)
 							: isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true',
 						chatByQRcode: data.ChatByQRcode || ''
@@ -414,13 +416,16 @@
 						conversation: { ...this.chatDetail.conversation, stickTop: isPinned } }
 				}
 			},
-			handleChatAction(action) {
-				if (action && action.key === 'select-job' && action.job && action.job.jobId) {
-					// 选择新职位后重建聊天面板，让它重新调用 Limits 校验新的职位权限。
+				handleChatAction(action) {
+				if (action && action.key === 'job-switched' && action.job && action.job.jobId) {
+					// 切换接口及云信通知完成后更新父页职位数据，保留当前聊天实例和已加载消息。
 					this.chatDetail = {
 						...this.chatDetail,
 						jobId: String(action.job.jobId),
-						jobName: action.job.name || ''
+						jobName: action.job.name || '',
+						jobLocation: action.job.location || '',
+						jobSalary: action.job.salary || '',
+						enterprise: action.enterprise || this.chatDetail.enterprise
 					}
 					return
 				}

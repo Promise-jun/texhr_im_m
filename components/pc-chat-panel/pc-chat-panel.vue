@@ -174,13 +174,14 @@
 					<button class="job-picker-close" aria-label="关闭职位列表" title="关闭" @click="closeJobPicker">×</button>
 				</view>
 				<view v-if="isLoadingJobs" class="job-picker-state">职位加载中...</view>
+				<view v-else-if="isSwitchingJob" class="job-picker-state">切换中...</view>
 				<view v-else-if="jobListError" class="job-picker-state job-picker-state--error">{{ jobListError }}</view>
 				<view v-else-if="!jobList.length" class="job-picker-empty">
 					<text>暂无职位数据，马上发布发起聊天吧</text>
 					<button class="job-publish-button" @click="emitAction('publish-job', '马上发布')">马上发布</button>
 				</view>
 				<scroll-view v-else scroll-y class="job-picker-list">
-					<button v-for="job in jobList" :key="job.key" class="job-picker-item" @click="selectJob(job)">
+					<button v-for="job in jobList" :key="job.key" class="job-picker-item" :disabled="isSwitchingJob" @click="selectJob(job)">
 						<text class="job-picker-item-name">{{ job.name }}</text>
 						<text class="job-picker-item-detail">{{ job.location }} - {{ job.salary }}</text>
 					</button>
@@ -204,6 +205,7 @@
 	const HISTORY_PAGE_SIZE = 50
 	const COMMON_LANGUAGE_GET_API = 'Chat.CommonLanguage.Get'
 	const JOB_LIST_GET_API = 'Chat.Chat.GetJobList'
+	const CHANGE_CHAT_JOB_API = 'Chat.Chat.ChangeJob'
 	const BLOCKED_USER_SEND_WARNING = '对方在您的黑名单中，无法回复您的消息'
 	const TALENT_BLOCKED_SEND_CODE = '102426'
 	const TALENT_BLOCKED_SEND_MESSAGE = '该人才已屏蔽您的消息，暂不能发送消息'
@@ -279,6 +281,13 @@
 		return value && typeof value === 'object' && !Array.isArray(value) ? value : null
 	}
 
+	function parseJobMessageData(data) {
+		const payload = parseObject(data)
+		if (!payload) return null
+		const job = parseObject(payload.Enterprise) || payload
+		return job.JobId || job.JobName || job.Tips ? job : null
+	}
+
 	function formatPersonGender(value) {
 		const normalized = String(value === undefined || value === null ? '' : value).trim().toLowerCase()
 		if (normalized === '1' || normalized === '男' || normalized === 'male' || normalized === 'm') return '男'
@@ -314,6 +323,12 @@
 			jobName,
 			location
 		}
+		}
+
+	function formatJobChangeMessage(job) {
+		if (!job || typeof job !== 'object') return ''
+		// type=5 的系统提示直接使用切换接口 Enterprise 返回的 Tips，不自行拼接职位文案。
+		return responseValue(job, ['Tips'])
 	}
 
 	export default {
@@ -332,7 +347,7 @@
 		data() {
 			return {
 				jobName: this.detail.jobName || '',
-				jobPickerVisible: false, isLoadingJobs: false, jobList: [], jobListError: '',
+				jobPickerVisible: false, isLoadingJobs: false, isSwitchingJob: false, jobList: [], jobListError: '',
 				messages: [], accessReady: false, isCheckingAccess: false, accessError: '',
 				isLoadingHistory: false, historyExhausted: false, historyError: '', scrollTarget: '',
 				isSending: false, isComposing: false, selfUser: {}, otherUser: {}, failedAvatars: {},
@@ -383,15 +398,18 @@
 					const revoked = Boolean(message.isRevoked)
 					const durationSeconds = this.audioDurations[id] || audioDurationSeconds(attachment.duration)
 					const customPayload = type === 100 ? parseCustomMessagePayload(message) : null
-					const person = !revoked && Number(customPayload && customPayload.type) === 4 ?
-						parsePersonMessageData(customPayload.data) : null
-					const content = revoked ? '消息已撤回' : type === 0 || type === 10 ? message.text || '[消息]'
-						: type === 6 && attachment.name ? `[文件] ${attachment.name}` : MESSAGE_LABELS[type] || '[暂不支持的消息]'
+					const customType = Number(customPayload && customPayload.type)
+					const customData = !revoked && (customType === 4 || customType === 5) ?
+						parseJobMessageData(customPayload.data) : null
+					const person = customType === 4 ? parsePersonMessageData(customPayload.data) : null
+					const jobChangeContent = customType === 5 ? formatJobChangeMessage(customData) : ''
+					const content = jobChangeContent || (revoked ? '消息已撤回' : type === 0 || type === 10 ? message.text || '[消息]'
+						: type === 6 && attachment.name ? `[文件] ${attachment.name}` : MESSAGE_LABELS[type] || '[暂不支持的消息]')
 					rows.push({
 						id, anchor: this.messageAnchor(id),
 						direction: message.isSelf || message.senderId === this.enterpriseAccId ? 'self' : 'other',
-						// PC 端自定义 type=4 使用 Person 字段渲染人才信息卡片。
-						type: revoked || type === 10 ? 'system' : person ? 'person-card' : type === 2 ? 'audio' : type === 1 && attachment.url ? 'image' : 'text',
+						// PC 端自定义 type=4 使用 Person 字段渲染人才信息卡片；type=5 使用居中系统提示。
+						type: revoked || type === 10 || Boolean(jobChangeContent) ? 'system' : person ? 'person-card' : type === 2 ? 'audio' : type === 1 && attachment.url ? 'image' : 'text',
 						url: attachment.url || '',
 						durationSeconds, audioWidth: audioBubbleWidth(durationSeconds), mimeType: getAudioMimeType(attachment),
 						content, person,
@@ -809,12 +827,76 @@
 					if (this._alive) this.isLoadingJobs = false
 				}
 			},
-			selectJob(job) {
-				if (!job) return
-				this.closeJobPicker()
-				// 选择结果交由页面处理，面板只负责展示列表，不擅自切换当前会话权限。
-				this.$emit('action', { key: 'select-job', label: '选择职位', job, jobId: job.jobId,
-					resumeId: this.resumeId, personAccId: this.personAccId, enterpriseAccId: this.enterpriseAccId })
+			async selectJob(job) {
+				if (!job || !this._alive || !this.visible || this.opening || this.isSwitchingJob) return
+				const targetJobId = responseValue(job, ['jobId', 'JobId', 'id', 'Id'])
+				if (!targetJobId) return
+				const currentJobId = String(this.jobId || '').trim()
+				if (targetJobId === currentJobId) {
+					this.closeJobPicker()
+					uni.showToast({ title: '该职位是当前沟通职位，无需切换', icon: 'none' })
+					return
+				}
+				if (!this.accessReady || !this.personAccId || !this.enterpriseAccId || !this.conversationId) {
+					uni.showToast({ title: '沟通信息尚未就绪', icon: 'none' })
+					return
+				}
+
+				this.isSwitchingJob = true
+				let switchedJob = null
+				let enterprise = null
+				try {
+					// 职位切换接口由移动端共用：成功返回 Enterprise 后，再通知云信双方更新职位上下文。
+					const response = await requestApi({ Name: CHANGE_CHAT_JOB_API, Content: {
+						PersonAccId: this.personAccId, EnterpriseAccId: this.enterpriseAccId,
+						JobId: targetJobId, IsMessage: true
+					} })
+					if (!response || Number(response.Code) !== 0) throw new Error('切换聊天职位失败')
+					let data = response.Data
+					if (typeof data === 'string') data = JSON.parse(data)
+					data = data && typeof data === 'object' && !Array.isArray(data) ? data : {}
+					if (data.Code !== undefined && Number(data.Code) !== 0) throw new Error('切换聊天职位失败')
+					enterprise = parseObject(data.Enterprise !== undefined ? data.Enterprise : response.Enterprise)
+					if (!enterprise) throw new Error('切换聊天职位失败：未返回 Enterprise')
+					switchedJob = {
+						...job,
+						jobId: responseValue(enterprise, ['JobId', 'Id', 'ID']) || targetJobId,
+						name: responseValue(enterprise, ['JobName', 'Name', 'PositionName', 'Title']) || job.name,
+						location: responseValue(enterprise, ['Location', 'JobLocation', 'WorkLocation', 'Address', 'Area']) || job.location,
+						salary: responseValue(enterprise, ['Salary', 'SalaryText', 'Pay']) || job.salary
+					}
+
+					if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪')
+					const nim = getNimInstance()
+					const messageService = nim && nim.V2NIMMessageService
+					const messageCreator = nim && nim.V2NIMMessageCreator
+					if (!this.conversationId || !messageService || typeof messageService.sendMessage !== 'function' ||
+						!messageCreator || typeof messageCreator.createCustomMessage !== 'function') {
+						throw new Error('当前聊天服务不支持发送自定义消息')
+					}
+					// 切换成功后发送固定业务消息体，data 必须是接口返回的 Enterprise 原对象。
+					const customMessage = messageCreator.createCustomMessage('', JSON.stringify({ type: 5, data: enterprise }))
+					const result = await messageService.sendMessage(customMessage, this.conversationId)
+					if (!result || !result.message) throw new Error('职位切换自定义消息发送失败')
+					if (!this._alive) return
+					this.mergeMessages([result.message])
+					this.scrollToBottom()
+					this.$emit('changed')
+				} catch (error) {
+					if (this._alive) uni.showToast({ title: switchedJob
+						? '职位已切换，但消息发送失败' : error.message || '切换聊天职位失败', icon: 'none' })
+				} finally {
+					if (this._alive) {
+						this.isSwitchingJob = false
+						if (switchedJob) {
+							// 业务切换已成功，即便云信发送失败也要同步当前职位，避免显示旧状态。
+							this.jobName = switchedJob.name || this.jobName
+							this.closeJobPicker()
+							this.$emit('action', { key: 'job-switched', label: '选择职位', job: switchedJob,
+								enterprise, jobId: targetJobId, previousJobId: currentJobId, conversationId: this.conversationId })
+						}
+					}
+				}
 			},
 			async loadCommonPhrases() {
 				if (!this._alive || this.isLoadingCommonPhrases) return
@@ -1044,7 +1126,7 @@
 		color: #fff; background: #126bd1; cursor: pointer; }
 	.job-picker-list { max-height: 400px; }
 	.job-picker-item { display: flex; align-items: center; justify-content: space-between; box-sizing: border-box; width: 100%; min-height: 64px;
-		padding: 10px 4px; border: 0; border-bottom: 1px solid #f0f2f4; text-align: left; background: #fff; cursor: pointer; }
+		padding: 10px 4px; border: 0; border-bottom: 1px solid #f0f2f4; text-align: left; background: #fff; cursor: pointer; &::after { border: 0; } }
 	.job-picker-item:hover { background: #f7faff; }
 	.job-picker-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #333b42; }
 	.job-picker-item-detail { flex: 0 0 auto; max-width: 58%; margin-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #7d8790; }

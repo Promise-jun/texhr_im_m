@@ -1,4 +1,11 @@
 {
+	"easycom": {
+		"autoscan": true,
+		"custom": {
+			// 为底部职位弹窗显式配置动画依赖，兼容开发环境的组件扫描缓存。
+			"^uni-transition$": "@/uni_modules/uni-transition/components/uni-transition/uni-transition.vue"
+		}
+	},
 	"pages": [ //pages数组中第一项表示应用启动页，参考：https://uniapp.dcloud.io/collocation/pages
 		{
 			"path": "pages/person/m/list",
@@ -23,6 +30,17 @@
 		},
 		{
 			"path": "pages/ehr/pc/chat",
+			"style": {
+				"navigationStyle": "custom",
+				"enablePullDownRefresh": false,
+				"backgroundColor": "white",
+				"app-plus": {
+					"titleNView": false
+				}
+			}
+		},
+		{
+			"path": "pages/person/m/detail",
 			"style": {
 				"navigationStyle": "custom",
 				"enablePullDownRefresh": false,

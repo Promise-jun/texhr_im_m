@@ -15,7 +15,7 @@ function deferred() {
 }
 
 function environment() {
-  const calls = [], sends = [], toasts = [], changes = []
+  const calls = [], sends = [], toasts = [], changes = [], actions = []
   const state = { loggedIn: true, prepares: 0 }
   let request = async () => ({ Code: 0, Data: { Rows: [] } })
   let send = async (message, conversationId) => ({ message: {
@@ -24,9 +24,12 @@ function environment() {
   } })
   const nim = {
     V2NIMUserService: { checkBlock: async accounts => ({ [accounts[0]]: false }) },
-    V2NIMMessageCreator: { createTextMessage: text => ({ text }) },
+    V2NIMMessageCreator: {
+      createTextMessage: text => ({ text }),
+      createCustomMessage: (text, raw) => ({ text, raw, messageType: 100, attachment: { raw } })
+    },
     V2NIMMessageService: { sendMessage: (message, id) => {
-      sends.push({ text: message.text, conversationId: id })
+      sends.push({ text: message.text, raw: message.raw, conversationId: id })
       return send(message, id)
     } }
   }
@@ -40,7 +43,10 @@ function environment() {
     jobId: 'job', resumeId: 'resume', enterpriseAccId: 'enterprise', personAccId: 'a',
     drafts: { a: '尚未发送的草稿', b: '另一个会话的草稿' }, visible: true, opening: false,
     _alive: true, $set: (obj, key, value) => { obj[key] = value },
-    $nextTick: fn => Promise.resolve().then(fn), $emit: event => changes.push(event) }
+    $nextTick: fn => Promise.resolve().then(fn), $emit: (event, payload) => {
+      if (event === 'action') actions.push(payload)
+      else changes.push(event)
+    } }
   Object.assign(panel, def.data.call(panel))
   for (const [name, method] of Object.entries(def.methods)) panel[name] = method.bind(panel)
   for (const [name, getter] of Object.entries(def.computed)) {
@@ -49,7 +55,7 @@ function environment() {
   }
   panel.prepareConversation = () => { state.prepares++ }
   panel.accessReady = true
-  return { panel, calls, sends, toasts, changes, state,
+  return { panel, calls, sends, toasts, changes, actions, state,
     request: fn => { request = fn }, send: fn => { send = fn } }
 }
 
@@ -90,9 +96,31 @@ async function verify() {
     '后端工程师-深圳-20-30K', '前端工程师-上海-15-25K'
   ])
   assert.equal(panel.jobPickerVisible, true)
+  const callsBeforeSameJob = env.calls.length
+  await panel.selectJob({ jobId: 'job', name: '当前职位' })
+  assert.equal(env.calls.length, callsBeforeSameJob)
+  assert.equal(env.toasts[env.toasts.length - 1], '该职位是当前沟通职位，无需切换')
   panel.closeJobPicker()
   assert.equal(panel.jobPickerVisible, false)
   console.log('PASS: switching jobs requests the first 50 jobs and formats name, location and salary')
+
+  env.request(async args => args.Name === 'Chat.Chat.ChangeJob'
+    ? { Code: 0, Data: { Enterprise: {
+      JobId: 'job-8', JobName: '前端工程师', Location: '杭州', Salary: '25-35K'
+    } } } : { Code: 0, Data: { Rows: [] } })
+  await panel.selectJob({ jobId: 'job-8', name: '前端工程师', location: '上海', salary: '15-25K' })
+  const changeCall = env.calls.find(item => item.Name === 'Chat.Chat.ChangeJob')
+  assert.deepEqual(changeCall.Content, {
+    PersonAccId: 'a', EnterpriseAccId: 'enterprise', JobId: 'job-8', IsMessage: true
+  })
+  const customSend = env.sends.find(item => item.raw)
+  assert.deepEqual(JSON.parse(customSend.raw), {
+    type: 5, data: { JobId: 'job-8', JobName: '前端工程师', Location: '杭州', Salary: '25-35K' }
+  })
+  assert.equal(panel.jobName, '前端工程师')
+  assert.equal(env.actions[env.actions.length - 1].key, 'job-switched')
+  assert.equal(env.actions[env.actions.length - 1].job.location, '杭州')
+  console.log('PASS: changing jobs calls ChangeJob and sends the Enterprise in a type=5 custom message')
 
   env.request(async args => args.Name === 'Chat.Chat.GetJobList'
     ? { Code: 0, Data: { Rows: [] } } : { Code: 0, Data: { Rows: [] } })
@@ -152,15 +180,16 @@ async function verify() {
   panel.phrasesVisible = true
   const phrase = panel.commonPhrases[1]
   await panel.sendCommonPhrase(phrase)
-  assert.equal(env.sends[0].text, phrase.message)
-  assert.equal(env.sends[0].conversationId, 'a')
-  assert.equal(panel.messages[0].text, phrase.message)
+  const phraseSend = env.sends.find(item => item.text === phrase.message)
+  assert.equal(phraseSend.text, phrase.message)
+  assert.equal(phraseSend.conversationId, 'a')
+  assert.equal(panel.messages.some(message => message.text === phrase.message), true)
   assert.equal(panel.phrasesVisible, false)
   assert.equal(panel.draft, '尚未发送的草稿')
   assert.equal(panel.drafts.b, '另一个会话的草稿')
   assert.equal(panel.sendingPhraseKey, '')
   assert.equal(panel.isSending, false)
-  assert.equal(env.changes[0], 'changed')
+  assert.equal(env.changes.includes('changed'), true)
   console.log('PASS: clicking sends the full phrase through NIM, merges its receipt, refreshes the conversation and preserves both drafts')
 
   const sending = deferred()
@@ -172,12 +201,12 @@ async function verify() {
   const duplicate = panel.sendCommonPhrase(phrase)
   const normalWhileSending = panel.sendMessage()
   await new Promise(resolve => setImmediate(resolve)) // 发送前先完成异步黑名单查询。
-  assert.equal(env.sends.length, 2)
+  assert.equal(env.sends.length, 3)
   await duplicate
   await normalWhileSending
   panel.draft = '发送期间追加的草稿'
   sending.reject(new Error('模拟发送失败，请重试')); await inFlight
-  assert.match(env.toasts[0], /模拟发送失败/)
+  assert.match(env.toasts[env.toasts.length - 1], /模拟发送失败/)
   assert.equal(panel.phrasesVisible, true)
   assert.equal(panel.isSending, false)
   assert.equal(panel.sendingPhraseKey, '')

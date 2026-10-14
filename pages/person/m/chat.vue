@@ -794,6 +794,8 @@
 			// uni-app 会把 URL 查询参数传给 onLoad；同时兼容大小写，避免外部链接差异。
 			this.jobId = String(options.jobId || options.JobId || '').trim()
 			this.resumeId = String(options.resumeId || options.ResumeId || '').trim()
+			// 历史详情的继续聊聊已发送指定消息，此入口不再重复发送初始化招呼语。
+			this._skipInitialChatGreeting = String(options.skipGreeting || '') === '1'
 			const systemInfo = uni.getSystemInfoSync()
 			this.statusBarHeight = systemInfo.statusBarHeight || 0
 			this._chatPageAlive = true
@@ -933,7 +935,7 @@
 					const hasLimitsMessage = typeof limitsMessage === 'string' ?
 						limitsMessage.trim().length > 0 :
 						limitsMessage !== undefined && limitsMessage !== null
-					if (normalizedReturnedJobId === normalizedCurrentJobId && hasLimitsMessage) {
+					if (!this._skipInitialChatGreeting && normalizedReturnedJobId === normalizedCurrentJobId && hasLimitsMessage) {
 						try {
 							await this.loadChatGreeting(limitsMessage, normalizedCurrentJobId)
 						} catch (error) {

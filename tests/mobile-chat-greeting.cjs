@@ -62,7 +62,7 @@ async function verify() {
       }
       throw new Error(`unexpected API: ${args.Name}`)
     },
-    uni: { showModal() {}, showToast() {}, $emit: (event, payload) => jobCardClicks.push({ event, payload }) },
+    uni: { getSystemInfoSync: () => ({}), $on() {}, showModal() {}, showToast() {}, $emit: (event, payload) => jobCardClicks.push({ event, payload }) },
     console
   }
   const context = vm.createContext(globals)
@@ -174,7 +174,22 @@ async function verify() {
   }
   assert.equal(normalize({ messageType: 100, attachment: { raw: '{invalid json' } }).type, 'text')
   assert.equal(normalize({ messageType: 100, attachment: { raw: JSON.stringify({ type: 6, data: { JobName: '采购' } }) } }).type, 'text')
+
+  // 历史详情已发出求职消息时，URL 标记仅跳过默认招呼语，权限与历史初始化仍执行。
+  page.loadCommonPhrases = () => {}
+  page.loadSendResumeStatus = () => {}
+  const apiCount = calls.length, sentCount = sent.length
+  await definition.onLoad.call(page, { jobId: 'job-7', resumeId: 'resume-3', skipGreeting: '1' })
+  assert.equal(page._skipInitialChatGreeting, true)
+  assert.equal(calls.length, apiCount + 1)
+  assert.equal(calls[calls.length - 1].Name, 'Chat.MyChat.Limits')
+  assert.equal(sent.length, sentCount)
+  // 普通入口保持原有默认消息行为。
+  await definition.onLoad.call(page, { jobId: 'job-7', resumeId: 'resume-3' })
+  assert.equal(page._skipInitialChatGreeting, false)
+  assert.equal(sent.length, sentCount + 2)
   console.log('PASS: matching jobs send the Limits message as type=4 before the ChatButton Greetings text')
+  console.log('PASS: history continuation skips duplicate default greetings while normal chat entries still send them')
   console.log('PASS: custom type=4/5 job cards, malformed payload fallback, native message isolation, and logo fallback')
   console.log('PASS: active job cards emit job data, and expired job cards do not trigger clicks')
 }

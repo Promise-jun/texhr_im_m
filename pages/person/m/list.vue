@@ -152,10 +152,11 @@
 		},
 		async onLoad() {
 			this._conversationPageAlive = true
+			this._historyConversationsLoaded = false
 			this.bindConversationEvents()
 		},
 		onShow() {
-			// 从聊天页返回时同时刷新 SDK 实时会话与 texhr 历史会话。
+			// 返回时刷新 SDK 实时会话；历史会话在当前列表页只加载一次。
 			this.currentTime = Date.now()
 			this.loadConversations()
 			this.loadHistoryConversations()
@@ -597,7 +598,7 @@
 				return this._conversationLoadPromise
 			},
 			async loadHistoryConversations() {
-				if (!this._conversationPageAlive) return
+				if (!this._conversationPageAlive || this._historyConversationsLoaded) return
 				if (!isNimLoggedIn()) {
 					const loginError = getNimLoginError()
 					if (loginError) {
@@ -615,6 +616,7 @@
 					.then(conversationList => {
 						if (!this._conversationPageAlive) return
 						this.historyConversations = conversationList
+						this._historyConversationsLoaded = true
 					})
 					.catch(error => {
 						if (!this._conversationPageAlive) return
@@ -651,6 +653,21 @@
 					return
 				}
 				if (!conversation || !conversation.id || this.openingConversationId) return
+				if (conversation.isHistory) {
+					// 历史会话仅传对方 Accid，由只读详情页串行获取会话信息和完整聊天记录。
+					const accid = String(conversation.targetId || '').trim()
+					if (!accid) {
+						uni.showToast({ title: '未获取到对方会话账号', icon: 'none' })
+						return
+					}
+					this.openingConversationId = conversation.id
+					uni.navigateTo({
+						url: `/pages/person/m/detail?Accid=${encodeURIComponent(accid)}`,
+						fail: () => uni.showToast({ title: '打开聊天详情失败', icon: 'none' }),
+						complete: () => { this.openingConversationId = '' }
+					})
+					return
+				}
 				if (!isNimLoggedIn()) {
 					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
 					return

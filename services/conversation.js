@@ -3,8 +3,6 @@ import { requestApi } from './request'
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const CONVERSATION_PAGE_SIZE = 100
-const HISTORY_CONVERSATION_MAX_PAGES = 1000
-const HISTORY_REPEAT_PAGE_LIMIT = 2
 const DEFAULT_AVATAR = '/static/default_avatar.png'
 const NIM_USER_PAGE_SIZE = 150
 
@@ -212,10 +210,8 @@ export function normalizeHistoryConversation(session) {
 }
 
 /**
- * 根据接口文档分页获取 texhr 数据库中的所有会话。
- *
- * 首次请求不传可选 start，使用服务端默认首页；随后从 start=1 递增。
- * 兼容默认首页与 start=1 指向同一页的情况，按 Accid 去重，并在连续重复页时停止。
+ * 一次获取 texhr 数据库中的所有会话，按 Accid 去重。
+ * GetAllSessions 已返回全部会话，不再通过 start 追加分页请求。
  */
 export async function getAllHistoryConversations() {
 	if (!isNimLoggedIn()) throw new Error('网易云信尚未登录')
@@ -226,39 +222,16 @@ export async function getAllHistoryConversations() {
 		: ''
 	if (!accountId) throw new Error('获取历史会话失败：未获取到当前网易云账号')
 
+	const response = await requestApi({
+		Name: NIM_GET_ALL_SESSIONS_API,
+		Content: { accid: accountId }
+	})
+	const sessions = assertHistoryResponse(response)
 	const conversationMap = new Map()
-	let repeatedPageCount = 0
-	let paginationFinished = false
-
-	for (let pageIndex = 0; pageIndex < HISTORY_CONVERSATION_MAX_PAGES; pageIndex += 1) {
-		const content = { accid: accountId }
-		if (pageIndex > 0) content.start = pageIndex
-
-		const response = await requestApi({
-			Name: NIM_GET_ALL_SESSIONS_API,
-			Content: content
-		})
-		const sessions = assertHistoryResponse(response)
-		if (!sessions.length) {
-			paginationFinished = true
-			break
-		}
-
-		let addedCount = 0
-		sessions.forEach(session => {
-			const conversation = normalizeHistoryConversation(session)
-			if (!conversation) return
-			if (!conversationMap.has(conversation.targetId)) addedCount += 1
-			conversationMap.set(conversation.targetId, conversation)
-		})
-
-		repeatedPageCount = addedCount > 0 ? 0 : repeatedPageCount + 1
-		if (repeatedPageCount >= HISTORY_REPEAT_PAGE_LIMIT) {
-			paginationFinished = true
-			break
-		}
-	}
-	if (!paginationFinished) throw new Error('获取历史会话失败：分页数量超过安全上限')
+	sessions.forEach(session => {
+		const conversation = normalizeHistoryConversation(session)
+		if (conversation) conversationMap.set(conversation.targetId, conversation)
+	})
 
 	return Array.from(conversationMap.values())
 }

@@ -90,4 +90,19 @@ assert.equal(panel.displayMessages.find(message => message.id === 'person-card')
 assert.ok(source.includes('/static/pc/icon_job.png'))
 assert.ok(source.includes('/static/pc/icon_location.png'))
 
-console.log('PASS: PC custom type=4 Person messages render the person information card and malformed Person payloads fall back to text')
+panel.messages.push({
+  messageClientId: 'job-change',
+  messageType: 100,
+  senderId: 'enterprise',
+  createTime: 2,
+  attachment: {
+    raw: JSON.stringify({ type: 5, data: {
+      JobId: 'job-5', JobName: '招聘顾问', Tips: '您已将沟通的职位更换成招聘顾问'
+    } })
+  }
+})
+const jobChange = panel.displayMessages.find(message => message.id === 'job-change')
+assert.equal(jobChange.type, 'system')
+assert.equal(jobChange.content, '您已将沟通的职位更换成招聘顾问')
+
+console.log('PASS: PC custom type=4 Person messages render the person information card; type=5 renders the centered job-change system message')
