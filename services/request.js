@@ -164,7 +164,7 @@ function parseAuthCookie(rawCookie, idField) {
 function isEnterprisePage() {
 	// #ifdef H5
 	if (typeof window !== 'undefined' && window.location) {
-		return String(window.location.href || '').toLowerCase().includes('ehr')
+		return String(window.location.pathname || '').toLowerCase().includes('ehr')
 	}
 	// #endif
 
@@ -173,17 +173,17 @@ function isEnterprisePage() {
 
 function getAuthFromCookie(isEnterprise) {
 	// 获取当前页面url
-	const url = window.location.href;
+	const url = window.location.pathname;
 	// 判断是否包含 ehr（区分大小写，EHR 匹配不到）
 	if (url.includes('ehr')) {
 		return {
 			EnterpriseId: 19441,
-			Token: 'u7IrRsMukgmq7r6oQOTh'
+			Token: 'XZB8ifKWHCdAx-V3a8Cz'
 		}
 	} else {
 		return {
 			PersonId: 210902,
-			Token: 'V8P5toCpduHhkthgcors'
+			Token: 'H7215wy9XGbeZm0lSejC'
 		}
 	}
 

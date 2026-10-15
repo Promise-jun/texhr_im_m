@@ -263,6 +263,39 @@ async function verifyDetailFlow() {
   }
 }
 
+async function verifyMessageJobStatuses() {
+  const env = environment(), pendingState = deferred()
+  const cardRow = {
+    MsgType: 4,
+    Msg: JSON.stringify({ type: 4, data: JSON.stringify({ Enterprise: { JobId: 'card-job', JobName: '职位卡片' } }) })
+  }
+  env.request(args => {
+    if (args.Name === 'Chat.Chat.GetSingleChat') {
+      return Promise.resolve({ Code: 0, Data: { ...singleDetail, PersonAccId: 'person-1', EnterpriseAccId: 'enterprise-1' } })
+    }
+    if (args.Name === 'Chat.Chat.GetSessionContent') return Promise.resolve({ Code: 0, Data: { Rows: [cardRow] } })
+    if (args.Name === 'Chat.Person.GetJobState') return pendingState.promise
+    throw new Error(`unexpected API: ${args.Name}`)
+  })
+
+  const loading = env.enter()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(env.page.messages.length, 0) // 状态返回前不渲染职位卡片。
+  assert.deepStrictEqual(env.calls[2], {
+    Name: 'Chat.Person.GetJobState', Content: { JobId: 'card-job' }
+  })
+  pendingState.resolve({ Code: 0, Data: { State: 1 } })
+  await loading
+  assert.equal(env.page.messages[0].job.status, true)
+
+  env.request(async args => ({ Code: 0, Data: { State: args.Content.JobId === 'normal-job' ? 1 : 3 } }))
+  const messages = await env.page.addJobStatusesBeforeRender([
+    { type: 'job-card', job: { JobId: 'normal-job' } },
+    { type: 'job-card', job: { JobId: 'full-job' } }
+  ])
+  assert.deepStrictEqual(plain(messages.map(message => message.job.status)), [true, false])
+}
+
 async function verifyEntryAndMedia() {
   const env = environment()
   const list = loadPage('pages/person/m/list.vue', env.globals).page
@@ -811,6 +844,7 @@ async function verifyContinueRetryAndUnload() {
 async function verify() {
   await verifyService()
   await verifyDetailFlow()
+  await verifyMessageJobStatuses()
   await verifyEntryAndMedia()
   await verifyInitialScroll()
   await verifyJobState()

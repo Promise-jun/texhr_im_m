@@ -305,6 +305,7 @@
 
 	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
 	const CHAT_BUTTON_API = 'Chat.ChatButton.Get'
+	const CHAT_GET_JOB_STATE_API = 'Chat.Person.GetJobState'
 	const CHANGE_CHAT_JOB_API = 'Chat.Chat.ChangeJob'
 	const CHAT_SAVE_API = 'Chat.Chat.Save'
 	const CHECK_SEND_RESUME_API = 'Chat.Person.CheckSendResume'
@@ -402,6 +403,44 @@
 
 		const job = parsed.Enterprise !== undefined ? parsed.Enterprise : parsed
 		return job && typeof job === 'object' && !Array.isArray(job) && (job.JobId || job.JobName) ? job : null
+	}
+
+	function addJobStatusToCustomData(data, status) {
+		const isJsonString = typeof data === 'string'
+		let parsed = data
+		if (isJsonString) {
+			try {
+				parsed = JSON.parse(data)
+			} catch (error) {
+				return data
+			}
+		}
+		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return data
+
+		const result = parsed.Enterprise !== undefined ? {
+			...parsed,
+			Enterprise: addJobStatusToCustomData(parsed.Enterprise, status)
+		} : {
+			...parsed,
+			status
+		}
+		return isJsonString ? JSON.stringify(result) : result
+	}
+
+	function addCustomMessageJobStatus(message, payload, status) {
+		const attachment = message && message.attachment && typeof message.attachment === 'object' ?
+			message.attachment : {}
+		const enrichedPayload = {
+			...payload,
+			data: addJobStatusToCustomData(payload.data, status)
+		}
+		return {
+			...message,
+			attachment: {
+				...attachment,
+				raw: JSON.stringify(enrichedPayload)
+			}
+		}
 	}
 
 	function getErrorCode(error) {
@@ -760,7 +799,7 @@
 			displayMessages() {
 				const result = []
 				let previousTimestamp = 0
-
+console.log(123, this.messages)
 				this.messages.forEach(rawMessage => {
 					const message = normalizeNimMessage(rawMessage)
 					if (!previousTimestamp || message.timestamp - previousTimestamp >= TIME_DIVIDER_INTERVAL) {
@@ -1009,13 +1048,13 @@
 							throw new Error('招呼语自定义消息发送失败：SDK 未返回消息')
 						}
 						pendingGreeting.customSent = true
-						this.mergeMessages([customResult.message])
+						await this.mergeMessages([customResult.message])
 					}
 
 					const textMessage = messageCreator.createTextMessage(pendingGreeting.greetingText)
 					const textResult = await messageService.sendMessage(textMessage, this.conversationId)
 					if (!textResult || !textResult.message) throw new Error('默认招呼语文本发送失败：SDK 未返回消息')
-					this.mergeMessages([textResult.message])
+					await this.mergeMessages([textResult.message])
 					this._pendingChatGreeting = null
 					this.$nextTick(() => this.scrollToBottom(true))
 				})().finally(() => {
@@ -1085,7 +1124,7 @@
 					const result = await messageService.sendMessage(message, this.conversationId)
 					if (!result || !result.message) throw new Error('自定义消息发送失败：SDK 未返回消息')
 
-					this.mergeMessages([result.message])
+					await this.mergeMessages([result.message])
 					this.$nextTick(() => this.scrollToBottom(true))
 				} catch (error) {
 					uni.showToast({
@@ -1290,15 +1329,55 @@
 					.filter(message => message && message.conversationId === this.conversationId)
 				if (!currentMessages.length) return
 
-				this.mergeMessages(currentMessages)
-				markNimConversationRead(this.conversationId).catch(error => {
-					console.warn('[Chat] 清除会话未读数失败', error)
-				})
-				this.$nextTick(() => this.scrollToBottom(true))
+				const afterMerge = () => {
+					if (!this._chatPageAlive) return
+					markNimConversationRead(this.conversationId).catch(error => {
+						console.warn('[Chat] 清除会话未读数失败', error)
+					})
+					this.$nextTick(() => this.scrollToBottom(true))
+				}
+				const mergeResult = this.mergeMessages(currentMessages)
+				return mergeResult && typeof mergeResult.then === 'function' ? mergeResult.then(afterMerge) : afterMerge()
 			},
-			mergeMessages(messageList) {
+			addJobStatusesBeforeRender(messageList) {
+				const resolvedMessages = (Array.isArray(messageList) ? messageList : []).map(message => {
+					const payload = parseCustomMessagePayload(message)
+					const customType = Number(payload && payload.type)
+					if (customType !== 4 && customType !== 5) return message
+
+					const job = parseJobMessageData(payload.data)
+					const jobId = job && job.JobId !== undefined && job.JobId !== null ? String(job.JobId).trim() : ''
+					if (!jobId) return addCustomMessageJobStatus(message, payload, false)
+
+					return requestApi({
+							Name: CHAT_GET_JOB_STATE_API,
+							Content: { JobId: jobId }
+						})
+						.then(response => {
+							if (!response || Number(response.Code) !== 0) {
+								const code = response && response.Code !== undefined ? response.Code : 'unknown'
+								throw new Error(`获取职位状态失败，业务错误码：${code}`)
+							}
+							const data = parseResponseData(response.Data, '职位状态接口返回的数据格式不正确')
+							if (data.Code !== undefined && Number(data.Code) !== 0) {
+								throw new Error(`获取职位状态失败，数据错误码：${data.Code}`)
+							}
+							// 渲染自定义职位消息前补充状态：仅 State=1 为有效，其余状态均为失效。
+							return Number(data.State) === 1
+						})
+						.catch(error => {
+							console.warn('[Chat] 获取自定义消息职位状态失败', error)
+							return false
+						})
+						.then(status => addCustomMessageJobStatus(message, payload, status))
+				})
+				return resolvedMessages.some(message => message && typeof message.then === 'function') ?
+					Promise.all(resolvedMessages) : resolvedMessages
+			},
+			commitMessages(resolvedMessages) {
+				if (this._chatPageAlive === false) return
 				const messageMap = new Map(this.messages.map(message => [getMessageId(message), message]))
-				messageList.forEach(message => {
+				resolvedMessages.forEach(message => {
 					if (!message || message.isDelete) return
 					messageMap.set(getMessageId(message), message)
 				})
@@ -1306,6 +1385,13 @@
 					const timeDiff = (Number(left.createTime) || 0) - (Number(right.createTime) || 0)
 					return timeDiff || getMessageId(left).localeCompare(getMessageId(right))
 				})
+			},
+			mergeMessages(messageList) {
+				const resolvedMessages = this.addJobStatusesBeforeRender(messageList)
+				if (resolvedMessages && typeof resolvedMessages.then === 'function') {
+					return resolvedMessages.then(messages => this.commitMessages(messages))
+				}
+				return this.commitMessages(resolvedMessages)
 			},
 			async loadCommonPhrases() {
 				if (this.isLoadingCommonPhrases) return
@@ -1932,7 +2018,7 @@
 						direction: 0
 					})
 					const historyMessages = Array.isArray(messageList) ? messageList : []
-					this.mergeMessages(historyMessages)
+					await this.mergeMessages(historyMessages)
 					this.historyExhausted = historyMessages.length < HISTORY_PAGE_SIZE
 
 					this.$nextTick(() => {
@@ -2345,7 +2431,7 @@
 					const result = await nim.V2NIMMessageService.sendMessage(message, this.conversationId)
 					if (!result || !result.message) throw new Error('语音发送失败：SDK 未返回消息')
 
-					this.mergeMessages([result.message])
+					await this.mergeMessages([result.message])
 					this.discardPendingVoice()
 					this.$nextTick(() => this.scrollToBottom(true))
 					return true
@@ -3175,7 +3261,7 @@
 						uni.hideLoading()
 						loadingVisible = false
 					}
-					this.mergeMessages([result.message])
+					await this.mergeMessages([result.message])
 					this.activePanel = ''
 					this.$nextTick(() => this.scrollToBottom(true))
 					return true
@@ -3234,7 +3320,7 @@
 					const result = await nim.V2NIMMessageService.sendMessage(message, this.conversationId)
 					if (!result || !result.message) throw new Error('消息发送失败：SDK 未返回消息')
 
-					this.mergeMessages([result.message])
+					await this.mergeMessages([result.message])
 					this.activePanel = ''
 					this.$nextTick(() => this.scrollToBottom(true))
 					return true

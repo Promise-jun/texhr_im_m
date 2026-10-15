@@ -187,6 +187,24 @@
 			this.destroyAudioPlayer()
 		},
 		methods: {
+			async addJobStatusesBeforeRender(messages) {
+				return Promise.all((Array.isArray(messages) ? messages : []).map(async message => {
+					if (!message || message.type !== 'job-card' || !message.job) return message
+					const jobId = message.job.JobId === undefined || message.job.JobId === null ?
+						'' : String(message.job.JobId).trim()
+					let status = false
+					if (jobId) {
+						try {
+							const state = await getHistoryChatJobState(jobId)
+							// 渲染自定义职位消息前补充状态：仅 State=1 为有效，其余状态均为失效。
+							status = state === 1
+						} catch (error) {
+							console.warn('[ChatHistory] 获取自定义消息职位状态失败', error)
+						}
+					}
+					return { ...message, job: { ...message.job, status } }
+				}))
+			},
 			handleLoginStatus(status) {
 				if (Number(status) === 1) this.loadHistoryDetail()
 			},
@@ -228,7 +246,8 @@
 						this.chatDetail = detail
 					}
 					// 必须等 GetSingleChat 成功，再使用实际返回的双方账号读取全部历史记录。
-					const messages = await getHistoryChatMessages(this.chatDetail.PersonAccId, this.chatDetail.EnterpriseAccId)
+					const historyMessages = await getHistoryChatMessages(this.chatDetail.PersonAccId, this.chatDetail.EnterpriseAccId)
+					const messages = await this.addJobStatusesBeforeRender(historyMessages)
 					if (!this._detailPageAlive) return
 					this.messages = messages
 					this._detailLoaded = true

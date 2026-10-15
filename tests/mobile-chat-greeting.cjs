@@ -60,6 +60,9 @@ async function verify() {
       if (args.Name === 'Chat.ChatButton.Get') {
         return { Code: 0, Data: { Greetings: '您好，方便聊聊这个职位吗？' } }
       }
+      if (args.Name === 'Chat.Person.GetJobState') {
+        return { Code: 0, Data: { State: args.Content.JobId === 'active-job' ? 1 : 2 } }
+      }
       throw new Error(`unexpected API: ${args.Name}`)
     },
     uni: { getSystemInfoSync: () => ({}), $on() {}, showModal() {}, showToast() {}, $emit: (event, payload) => jobCardClicks.push({ event, payload }) },
@@ -163,6 +166,27 @@ async function verify() {
   assert.equal(page.displayMessages.find(message => message.id === 'received-card').type, 'job-card')
   assert.equal(page.displayMessages.find(message => message.id === 'received-card').direction, 'other')
 
+  const activeCard = {
+    conversationId: page.conversationId,
+    messageClientId: 'active-card',
+    messageType: 100,
+    createTime: 4,
+    attachment: { raw: JSON.stringify({ type: 4, data: JSON.stringify({ Enterprise: { JobId: 'active-job', JobName: '有效职位' } }) }) }
+  }
+  const expiredCard = {
+    conversationId: page.conversationId,
+    messageClientId: 'expired-card',
+    messageType: 100,
+    createTime: 5,
+    attachment: { raw: JSON.stringify({ type: 5, data: { JobId: 'expired-job', JobName: '失效职位' } }) }
+  }
+  const mergingJobCards = page.mergeMessages([activeCard, expiredCard])
+  assert.equal(page.messages.some(message => message.messageClientId === 'active-card'), false)
+  await mergingJobCards
+  assert.equal(page.displayMessages.find(message => message.id === 'active-card').job.status, true)
+  assert.equal(page.displayMessages.find(message => message.id === 'expired-card').job.status, false)
+  assert.deepEqual(calls.slice(-2).map(call => call.Content), [{ JobId: 'active-job' }, { JobId: 'expired-job' }])
+
   const normalize = vm.runInContext('normalizeNimMessage', context)
   assert.equal(normalize({ messageType: 100, attachment: { type: '5', data: { JobName: '采购' } } }).job.EnterpriseTime,
     undefined)
@@ -191,6 +215,7 @@ async function verify() {
   console.log('PASS: matching jobs send the Limits message as type=4 before the ChatButton Greetings text')
   console.log('PASS: history continuation skips duplicate default greetings while normal chat entries still send them')
   console.log('PASS: custom type=4/5 job cards, malformed payload fallback, native message isolation, and logo fallback')
+  console.log('PASS: custom job cards wait for GetJobState and map State=1 to status=true')
   console.log('PASS: active job cards emit job data, and expired job cards do not trigger clicks')
 }
 
