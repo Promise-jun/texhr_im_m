@@ -118,6 +118,11 @@
 		getHistoryChatDetail, getHistoryChatMessages, getHistoryChatJobState,
 		getHistoryChatButton, changeHistoryChatJob, getHistoryChatJobList
 	} from '../../../services/chat-history'
+	import {
+		appendExternalReturnUrl,
+		getExternalReturnUrl,
+		navigateBackWithExternal
+	} from '../../../services/navigation'
 	import UniPopup from '../../../uni_modules/uni-popup/components/uni-popup/uni-popup.vue'
 
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
@@ -146,7 +151,8 @@
 				defaultAvatar: DEFAULT_AVATAR,
 				failedAvatarIds: [],
 				failedJobLogoIds: [],
-				audioPlayingId: ''
+				audioPlayingId: '',
+				externalReturnUrl: ''
 			}
 		},
 		computed: {
@@ -160,6 +166,7 @@
 		async onLoad(options = {}) {
 			// 列表页传入历史会话的对方 Accid，同时兼容手工链接的小写参数。
 			this.enterpriseAccId = String(options.Accid || options.accid || '').trim()
+			this.externalReturnUrl = getExternalReturnUrl(options)
 			this.statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 0
 			this._detailPageAlive = true
 			this._keepHistoryAtBottom = true
@@ -431,7 +438,10 @@
 				return new Promise((resolve, reject) => {
 					// 已在详情页完成消息发送，聊天页只加载会话，跳过初始化默认招呼语。
 					uni.navigateTo({
-						url: `/pages/person/m/chat?jobId=${encodeURIComponent(pending.jobId)}&resumeId=${encodeURIComponent(pending.resumeId)}&skipGreeting=1`,
+						url: appendExternalReturnUrl(
+							`/pages/person/m/chat?jobId=${encodeURIComponent(pending.jobId)}&resumeId=${encodeURIComponent(pending.resumeId)}&skipGreeting=1`,
+							this.externalReturnUrl
+						),
 						success: () => {
 							if (this._detailPageAlive) this._continueChatOpened = true
 							resolve()
@@ -441,8 +451,7 @@
 				})
 			},
 			navigateBack() {
-				if (getCurrentPages().length > 1) uni.navigateBack()
-				else uni.reLaunch({ url: '/pages/person/m/list' })
+				navigateBackWithExternal(this.externalReturnUrl, '/pages/person/m/list')
 			},
 			handleAvatarError(message) {
 				if (!this.failedAvatarIds.includes(message.id)) this.failedAvatarIds.push(message.id)

@@ -34,6 +34,14 @@ function environment() {
     getActiveConversationId: () => '',
     getNimLoginError: () => state.loginError,
     isNimLoggedIn: () => state.loggedIn,
+    getExternalReturnUrl: options => String(options && options.returnUrl || '').trim(),
+    appendExternalReturnUrl: (url, externalReturnUrl) => externalReturnUrl ?
+      `${url}${url.includes('?') ? '&' : '?'}returnUrl=${encodeURIComponent(externalReturnUrl)}` : url,
+    navigateBackWithExternal: (externalReturnUrl, fallbackUrl = '') => {
+      if (externalReturnUrl) return true
+      if (fallbackUrl) return true
+      return false
+    },
     getNimInstance: () => ({
       V2NIMLoginService: { getLoginUser: () => state.accountId },
       V2NIMConversationIdUtil: { p2pConversationId: id => `p2p-${id}` },

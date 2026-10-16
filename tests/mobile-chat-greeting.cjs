@@ -12,7 +12,10 @@ const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
 async function verify() {
   const calls = []
   const sent = []
-  const jobCardClicks = []
+  const browserLocation = { href: '' }
+  const modals = []
+  let limitsSuccessStep = null
+  let pageBackCount = 0
   const nim = {
     V2NIMMessageCreator: {
       createCustomMessage: (text, raw) => ({ kind: 'custom', messageType: 100, text, attachment: { raw }, body: raw }),
@@ -44,6 +47,15 @@ async function verify() {
     markNimConversationRead: async () => {},
     parseNimEmojiText: text => [{ type: 'text', content: text }],
     setActiveConversationId() {},
+    getExternalReturnUrl: options => String(options && options.returnUrl || '').trim(),
+    navigateBackWithExternal: (externalReturnUrl, fallbackUrl = '') => {
+      if (externalReturnUrl) {
+        browserLocation.href = externalReturnUrl
+        return true
+      }
+      pageBackCount += 1
+      return true
+    },
     requestApi: async args => {
       calls.push(args)
       if (args.Name === 'Chat.MyChat.Limits') {
@@ -51,9 +63,11 @@ async function verify() {
           Code: 0,
           Data: {
             JobId: 'job-7',
+            CodeNum: '128943',
             PersonAccId: 'person-1',
             EnterpriseAccId: 'enterprise-2',
-            Message: { JobName: '面料采购' }
+            Message: { JobName: '面料采购' },
+            ...(limitsSuccessStep ? { SuccessStep: limitsSuccessStep } : {})
           }
         }
       }
@@ -63,9 +77,29 @@ async function verify() {
       if (args.Name === 'Chat.Person.GetJobState') {
         return { Code: 0, Data: { State: args.Content.JobId === 'active-job' ? 1 : 2 } }
       }
+      if (args.Name === 'Chat.Peson.Delivery') {
+        return {
+          Code: 0,
+          Data: {
+            Tips: '投递成功，请完善简历',
+            ButtonName: '立即完善'
+          }
+        }
+      }
       throw new Error(`unexpected API: ${args.Name}`)
     },
-    uni: { getSystemInfoSync: () => ({}), $on() {}, showModal() {}, showToast() {}, $emit: (event, payload) => jobCardClicks.push({ event, payload }) },
+    window: { location: browserLocation },
+    uni: {
+      getSystemInfoSync: () => ({}),
+      $on() {},
+      showModal: options => modals.push(options),
+      showLoading() {},
+      hideLoading() {},
+      showToast() {},
+      navigateBack: () => { pageBackCount += 1 },
+      $emit() {}
+    },
+    getCurrentPages: () => [{}, {}],
     console
   }
   const context = vm.createContext(globals)
@@ -88,6 +122,9 @@ async function verify() {
   assert.equal(calls[0].Name, 'Chat.MyChat.Limits')
   assert.equal(calls[1].Name, 'Chat.ChatButton.Get')
   assert.deepEqual(calls[1].Content, { JobId: 'job-7' })
+  assert.equal(page.codeNum, '128943')
+  page.handleAction({ key: 'company' })
+  assert.equal(browserLocation.href, 'https://m.texhr.cn/zp128943/')
   assert.equal(sent.length, 2)
   assert.equal(sent[0].message.kind, 'custom')
   assert.deepEqual(JSON.parse(sent[0].message.body), {
@@ -111,7 +148,7 @@ async function verify() {
     attachment: {
       raw: JSON.stringify({
         type: 4,
-        data: JSON.stringify({ Enterprise: { JobId: 'card-job-4', JobName: '招聘顾问', Salary: '4K-6K', status: true, EnterpriseTime: '2026-10-12 10:00' } })
+        data: JSON.stringify({ Enterprise: { JobId: '82465', JobName: '招聘顾问', Salary: '4K-6K', status: true, EnterpriseTime: '2026-10-12 10:00' } })
       })
     }
   }, {
@@ -136,18 +173,14 @@ async function verify() {
   assert.equal(page.displayMessages[1].job.EnterpriseTime, '2026-10-12 10:00')
 
   page.handleJobCardClick(page.displayMessages[1])
-  assert.equal(jobCardClicks.length, 1)
-  assert.equal(jobCardClicks[0].event, 'chat:job-card-click')
-  assert.equal(jobCardClicks[0].payload.jobId, 'card-job-4')
-  assert.equal(jobCardClicks[0].payload.job.Salary, '4K-6K')
+  assert.equal(browserLocation.href, 'https://m.texhr.cn/zp128943/82465/')
   page.handleJobCardClick(page.displayMessages[2])
   for (const status of [undefined, null, false, 0, '']) {
     page.handleJobCardClick({ type: 'job-card', job: { JobId: 'expired-job', status } })
   }
-  assert.equal(jobCardClicks.length, 1)
+  assert.equal(browserLocation.href, 'https://m.texhr.cn/zp128943/82465/')
   page.handleJobCardClick({ type: 'job-card', job: { JobId: 'card-job-5', status: 1 } })
-  assert.equal(jobCardClicks.length, 2)
-  assert.equal(jobCardClicks[1].payload.jobId, 'card-job-5')
+  assert.equal(browserLocation.href, 'https://m.texhr.cn/zp128943/card-job-5/')
 
   page.handleJobLogoError(page.displayMessages[2])
   page.handleJobLogoError(page.displayMessages[2])
@@ -212,11 +245,50 @@ async function verify() {
   await definition.onLoad.call(page, { jobId: 'job-7', resumeId: 'resume-3' })
   assert.equal(page._skipInitialChatGreeting, false)
   assert.equal(sent.length, sentCount + 2)
+
+  // Limits 返回 SuccessStep 时展示可取消弹窗；取消返回聊天上一页，确定按 StepName 跳转。
+  limitsSuccessStep = { Tips: '请先完善简历', StepName: '立即完善' }
+  const modalCount = modals.length
+  await page.loadChatAccess()
+  assert.equal(modals.length, modalCount + 1)
+  const successStepModal = modals[modals.length - 1]
+  assert.equal(successStepModal.showCancel, true)
+  assert.equal(successStepModal.confirmText, '立即完善')
+  successStepModal.success({ cancel: true })
+  assert.equal(pageBackCount, 1)
+  successStepModal.success({ confirm: true })
+  assert.equal(browserLocation.href, 'https://m.texhr.cn/person/standardresume/myresume/')
+  for (const stepName of ['立即创建', '立即完善', '立即修改', '立即验证']) {
+    page.navigateByStep(stepName)
+    assert.equal(browserLocation.href, 'https://m.texhr.cn/person/standardresume/myresume/')
+  }
+  page.navigateByStep('解除')
+  assert.equal(browserLocation.href, 'https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
+
+  page.personAccId = 'person/report id'
+  page.enterpriseAccId = 'enterprise/report id'
+  page.handleReportAction()
+  assert.equal(browserLocation.href,
+    'https://m.texhr.cn/report/ChatReportView?FromAccid=person%2Freport%20id&ToAccid=enterprise%2Freport%20id&reportType=person')
+
+  // 投递成功弹窗确认时复用 SuccessStep 的页面跳转方法，并传入 ButtonName。
+  page.sendResumeJob = { jobId: '82465' }
+  const deliveryModalCount = modals.length
+  await page.confirmSendResume()
+  assert.equal(modals.length, deliveryModalCount + 1)
+  const deliveryModal = modals[modals.length - 1]
+  assert.equal(deliveryModal.showCancel, false)
+  assert.equal(deliveryModal.confirmText, '立即完善')
+  deliveryModal.success({ confirm: true })
+  assert.equal(browserLocation.href, 'https://m.texhr.cn/person/standardresume/myresume/')
   console.log('PASS: matching jobs send the Limits message as type=4 before the ChatButton Greetings text')
   console.log('PASS: history continuation skips duplicate default greetings while normal chat entries still send them')
   console.log('PASS: custom type=4/5 job cards, malformed payload fallback, native message isolation, and logo fallback')
   console.log('PASS: custom job cards wait for GetJobState and map State=1 to status=true')
-  console.log('PASS: active job cards emit job data, and expired job cards do not trigger clicks')
+  console.log('PASS: active job cards open CodeNum/JobId URLs, and expired job cards do not navigate')
+  console.log('PASS: Limits CodeNum is saved and used to open the mobile company homepage')
+  console.log('PASS: SuccessStep cancel returns to the previous page and confirm routes by StepName')
+  console.log('PASS: delivery success confirmation routes through navigateByStep(buttonName)')
 }
 
 verify().catch(error => {

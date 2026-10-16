@@ -302,6 +302,10 @@
 		NIM_EMOJIS,
 		parseNimEmojiText
 	} from '../../../services/nim-emoji'
+	import {
+		getExternalReturnUrl,
+		navigateBackWithExternal
+	} from '../../../services/navigation'
 
 	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
 	const CHAT_BUTTON_API = 'Chat.ChatButton.Get'
@@ -688,6 +692,8 @@
 				// 页面业务参数：由 /pages/chat/chat?jobId=...&resumeId=... 注入。
 				jobId: '',
 				resumeId: '',
+				externalReturnUrl: '',
+				codeNum: '',
 				personAccId: '',
 				enterpriseAccId: '',
 				defaultEnterpriseLogo: DEFAULT_AVATAR,
@@ -799,7 +805,7 @@
 			displayMessages() {
 				const result = []
 				let previousTimestamp = 0
-console.log(123, this.messages)
+
 				this.messages.forEach(rawMessage => {
 					const message = normalizeNimMessage(rawMessage)
 					if (!previousTimestamp || message.timestamp - previousTimestamp >= TIME_DIVIDER_INTERVAL) {
@@ -833,6 +839,7 @@ console.log(123, this.messages)
 			// uni-app 会把 URL 查询参数传给 onLoad；同时兼容大小写，避免外部链接差异。
 			this.jobId = String(options.jobId || options.JobId || '').trim()
 			this.resumeId = String(options.resumeId || options.ResumeId || '').trim()
+			this.externalReturnUrl = getExternalReturnUrl(options)
 			// 历史详情的继续聊聊已发送指定消息，此入口不再重复发送初始化招呼语。
 			this._skipInitialChatGreeting = String(options.skipGreeting || '') === '1'
 			const systemInfo = uni.getSystemInfoSync()
@@ -913,6 +920,8 @@ console.log(123, this.messages)
 					if (data.Code !== undefined && Number(data.Code) !== 0) {
 						throw new Error(`获取沟通状态失败，数据错误码：${data.Code}`)
 					}
+					const codeNum = data.CodeNum !== undefined ? data.CodeNum : response.CodeNum
+					this.codeNum = codeNum === undefined || codeNum === null ? '' : String(codeNum).trim()
 					const isTop = data.IsTop !== undefined ? data.IsTop : response.IsTop
 					this.isPinned = isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true'
 					// 兼容会话账号信息位于 Data 或响应根节点的两种返回结构。
@@ -926,10 +935,19 @@ console.log(123, this.messages)
 					const successStep = data.SuccessStep || response.SuccessStep
 					if (successStep) {
 						this.historyExhausted = true
+						const stepName = String(successStep.StepName || '').trim()
 						uni.showModal({
 							content: String(successStep.Tips || ''),
-							confirmText: String(successStep.StepName || '确定'),
-							showCancel: false
+							confirmText: stepName || '确定',
+							cancelText: '取消',
+							showCancel: true,
+							success: result => {
+								if (result && result.cancel) {
+									this.navigateBack()
+									return
+								}
+								this.navigateByStep(stepName)
+							}
 						})
 						return
 					}
@@ -1300,12 +1318,21 @@ console.log(123, this.messages)
 				this.otherAvatar = DEFAULT_AVATAR
 			},
 			handleJobCardClick(message) {
-				// 失效职位不触发业务事件；有效卡片将当前消息中的职位信息交给业务层。
+				// 失效职位不跳转；有效卡片使用当前消息中的职位 ID 打开移动端职位详情。
 				if (!message || message.type !== 'job-card' || !message.job || !message.job.status) return
-				uni.$emit('chat:job-card-click', {
-					jobId: message.job.JobId,
-					job: message.job
-				})
+				const codeNum = String(this.codeNum || '').trim()
+				const jobId = message.job.JobId === undefined || message.job.JobId === null ?
+					'' : String(message.job.JobId).trim()
+				if (!codeNum || !jobId) {
+					uni.showToast({
+						title: !codeNum ? '未获取到公司编号' : '未获取到职位编号',
+						icon: 'none'
+					})
+					return
+				}
+				this.openMobileSiteUrl(
+					`https://m.texhr.cn/zp${encodeURIComponent(codeNum)}/${encodeURIComponent(jobId)}/`
+				)
 			},
 			handleJobLogoError(message) {
 				// 使用页面响应式状态切换兜底图，保留原始消息，并避免兜底图失败时反复触发更新。
@@ -1622,14 +1649,23 @@ console.log(123, this.messages)
 				}
 			},
 			navigateBack() {
-				const pages = getCurrentPages()
-				if (pages.length > 1) {
-					uni.navigateBack()
+				navigateBackWithExternal(this.externalReturnUrl, '/pages/person/m/list')
+			},
+			navigateByStep(stepName) {
+				const normalizedStepName = String(stepName || '').trim()
+				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '立即验证']
+				if (resumeStepNames.includes(normalizedStepName)) {
+					this.openMobileSiteUrl('https://m.texhr.cn/person/standardresume/myresume/')
 					return
 				}
-				uni.reLaunch({
-					url: '/pages/person/m/list'
-				})
+				if (normalizedStepName === '解除') {
+					this.openMobileSiteUrl('https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
+					return
+				}
+				// uni.showToast({
+				// 	title: normalizedStepName ? `暂不支持${normalizedStepName}操作` : '未获取到下一步操作',
+				// 	icon: 'none'
+				// })
 			},
 			handleAction(action) {
 				if (action.key === 'resume') {
@@ -1640,12 +1676,43 @@ console.log(123, this.messages)
 					this.updatePinStatus()
 					return
 				}
+				if (action.key === 'company') {
+					this.openCompanyHome()
+					return
+				}
 				if (action.key === 'more') {
 					this.openMoreActionMenu()
 					return
 				}
+			},
+			openCompanyHome() {
+				const codeNum = String(this.codeNum || '').trim()
+				if (!codeNum) {
+					uni.showToast({
+						title: '未获取到公司编号',
+						icon: 'none'
+					})
+					return
+				}
+
+				this.openMobileSiteUrl(`https://m.texhr.cn/zp${encodeURIComponent(codeNum)}/`)
+			},
+			openMobileSiteUrl(url) {
+				// return
+				// #ifdef H5
+				if (typeof window !== 'undefined' && window.location) {
+					window.location.href = url
+					return
+				}
+				// #endif
+				// #ifdef APP-PLUS
+				if (typeof plus !== 'undefined' && plus.runtime && typeof plus.runtime.openURL === 'function') {
+					plus.runtime.openURL(url)
+					return
+				}
+				// #endif
 				uni.showToast({
-					title: '公司主页功能待接入',
+					title: '当前环境无法打开页面',
 					icon: 'none'
 				})
 			},
@@ -1709,10 +1776,18 @@ console.log(123, this.messages)
 				}
 			},
 			handleReportAction() {
-				uni.showToast({
-					title: '举报功能暂未接入',
-					icon: 'none'
-				})
+				const fromAccid = String(this.personAccId || '').trim()
+				const toAccid = String(this.enterpriseAccId || '').trim()
+				if (!fromAccid || !toAccid) {
+					uni.showToast({
+						title: '未获取到举报所需的聊天账号',
+						icon: 'none'
+					})
+					return
+				}
+
+				const query = `FromAccid=${encodeURIComponent(fromAccid)}&ToAccid=${encodeURIComponent(toAccid)}&reportType=person`
+				this.openMobileSiteUrl(`https://m.texhr.cn/report/ChatReportView?${query}`)
 			},
 			async handleMessagePermissionAction() {
 				if (this.isUpdatingBlockStatus || !this.enterpriseAccId) return
@@ -1986,7 +2061,8 @@ console.log(123, this.messages)
 						title: '温馨提示',
 						content: tips,
 						showCancel: false,
-						confirmText: buttonName || '知道了'
+						confirmText: buttonName || '知道了',
+						success: () => this.navigateByStep(buttonName)
 					})
 				} catch (error) {
 					if (!this._chatPageAlive) return

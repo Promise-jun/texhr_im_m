@@ -51,6 +51,21 @@ function environment() {
     NIM_EVENT: { LOGIN_STATUS: 'login-status', LOGIN_FAILED: 'login-failed' },
     getNimLoginError: () => state.loginError,
     isNimLoggedIn: () => state.loggedIn,
+    getExternalReturnUrl: options => String(options && options.returnUrl || '').trim(),
+    appendExternalReturnUrl: (url, externalReturnUrl) => externalReturnUrl ?
+      `${url}${url.includes('?') ? '&' : '?'}returnUrl=${encodeURIComponent(externalReturnUrl)}` : url,
+    navigateBackWithExternal: (externalReturnUrl, fallbackUrl = '') => {
+      if (externalReturnUrl) return true
+      if (getCurrentPages().length > 1) {
+        uni.navigateBack()
+        return true
+      }
+      if (fallbackUrl) {
+        uni.reLaunch({ url: fallbackUrl })
+        return true
+      }
+      return false
+    },
     getNimInstance: () => nim,
     getCurrentPages: () => [{}, {}],
     requestApi: args => { calls.push(plain(args)); events.push(args.Name); return request(args) },

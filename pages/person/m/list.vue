@@ -6,8 +6,6 @@
 			</view>
 			<view class="navigation-title-wrap">
 				<text class="navigation-title">消息列表</text>
-				<!-- 全局新消息提示：即使 SDK 会话未及时回推未读数，也先给出红点反馈。 -->
-				<text v-if="hasNewMessage" class="navigation-dot"></text>
 			</view>
 		</view>
 
@@ -35,9 +33,8 @@
 				<image v-if="conversation.stickTop" src="/static/icon_top.png" class="top-icon" mode="aspectFit"></image>
 				<view class="avatar-wrap">
 					<image :src="conversation.avatar" class="avatar" mode="aspectFill"></image>
-					<text v-if="conversation.unreadCount > 0 || conversation.hasNewMessage" class="unread-badge"
-						:class="{ 'is-muted': conversation.mute, 'is-dot': conversation.hasNewMessage && conversation.unreadCount <= 0 }">
-						{{ conversation.mute || conversation.unreadCount <= 0 ? '' : conversation.unreadText }}
+					<text v-if="conversation.unreadCount > 0" class="unread-badge">
+						{{ conversation.unreadText }}
 					</text>
 				</view>
 				<view class="conversation-content">
@@ -83,6 +80,11 @@
 	import {
 		requestApi
 	} from '../../../services/request'
+	import {
+		appendExternalReturnUrl,
+		getExternalReturnUrl,
+		navigateBackWithExternal
+	} from '../../../services/navigation'
 
 	const CHAT_SAVE_API = 'Chat.Chat.Save'
 	const CHAT_DELETE_API = 'Chat.Chat.Delete'
@@ -125,6 +127,7 @@
 				updatingPinConversationId: '',
 				deletingConversationId: '',
 				openingConversationId: '',
+				externalReturnUrl: '',
 				// 新消息事件是页面级兜底状态，列表项上的 hasNewMessage 会进一步定位到具体会话。
 				hasNewMessage: false
 			}
@@ -150,7 +153,8 @@
 				return this.activeTab === 'history' ? this.historyLoadError : this.loadError
 			}
 		},
-		async onLoad() {
+		async onLoad(options = {}) {
+			this.externalReturnUrl = getExternalReturnUrl(options)
 			this._conversationPageAlive = true
 			this._historyConversationsLoaded = false
 			this.bindConversationEvents()
@@ -640,10 +644,7 @@
 				this.loadConversations()
 			},
 			navigateBack() {
-				const pages = getCurrentPages()
-				if (pages.length > 1) {
-					uni.navigateBack()
-				}
+				navigateBackWithExternal(this.externalReturnUrl)
 			},
 
 			async openConversation(conversation) {
@@ -662,7 +663,7 @@
 					}
 					this.openingConversationId = conversation.id
 					uni.navigateTo({
-						url: `/pages/person/m/detail?Accid=${encodeURIComponent(accid)}`,
+						url: appendExternalReturnUrl(`/pages/person/m/detail?Accid=${encodeURIComponent(accid)}`, this.externalReturnUrl),
 						fail: () => uni.showToast({ title: '打开聊天详情失败', icon: 'none' }),
 						complete: () => { this.openingConversationId = '' }
 					})
@@ -813,16 +814,6 @@
 				justify-content: center;
 			}
 
-			.navigation-dot {
-				position: absolute;
-				top: -4rpx;
-				right: -18rpx;
-				width: 14rpx;
-				height: 14rpx;
-				background: #f04444;
-				border: 2rpx solid #ffffff;
-				border-radius: 50%;
-			}
 		}
 
 		.tabs {
@@ -959,22 +950,6 @@
 						border: 2rpx solid #ffffff;
 						border-radius: 18rpx;
 
-						&.is-muted {
-							top: -2rpx;
-							right: -2rpx;
-							min-width: 16rpx;
-							width: 16rpx;
-							height: 16rpx;
-							padding: 0;
-						}
-
-						&.is-dot {
-							min-width: 16rpx;
-							width: 16rpx;
-							height: 16rpx;
-							padding: 0;
-							border-radius: 50%;
-						}
 					}
 				}
 
