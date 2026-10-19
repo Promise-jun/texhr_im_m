@@ -38,7 +38,8 @@
 					<view v-else :id="message.anchor" :key="message.id" class="message-row"
 						:class="[message.direction, { 'message-row--person-card': message.type === 'person-card' }]">
 						<!-- type=4 的 Person 卡片为完整信息块，不展示聊天头像和气泡。 -->
-						<view v-if="message.type === 'person-card'" class="person-message-card">
+						<view v-if="message.type === 'person-card'" class="person-message-card"
+							@click.stop="emitAction('resume', '查看简历')">
 							<text class="person-message-name">{{ message.person.name }}</text>
 							<view v-if="message.person.meta.length" class="person-message-meta">
 								<text v-for="(item, index) in message.person.meta" :key="index" class="person-message-meta-item">{{ item }}</text>
@@ -1157,7 +1158,7 @@
 		.message-bubble::before { left: auto; right: -6px; border-left: 6px solid #e8f3ff; border-right: 0; } } }
 	.message-row--person-card { display: block; }
 	.person-message-card { box-sizing: border-box; width: 100%; min-height: 102px; padding: 16px 14px;
-		border: 1px solid #f1f2f3; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .05); }
+		border: 1px solid #f1f2f3; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .05); cursor: pointer; }
 	.person-message-name { display: block; overflow: hidden; font-size: 16px; line-height: 24px; color: #0866d9;
 		text-overflow: ellipsis; white-space: nowrap; }
 	.person-message-meta, .person-message-intention { display: flex; align-items: center; flex-wrap: wrap; min-width: 0;

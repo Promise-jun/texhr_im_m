@@ -429,14 +429,38 @@
 					}
 					return
 				}
+				if (action && ['resume', 'interview', 'unsuitable'].includes(action.key)) {
+					const resumeId = String(action.resumeId || (this.chatDetail && this.chatDetail.resumeId) || '').trim()
+					if (!resumeId) {
+						uni.showToast({ title: '未获取到简历信息', icon: 'none' })
+						return
+					}
+					const resumeUrl = `https://www.texhr.cn/resumes/?ids=${encodeURIComponent(resumeId)}`
+					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
+						? window.open(resumeUrl, '_blank') : null
+					if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
+					return
+				}
+				if (action && action.key === 'report') {
+					const fromAccid = String(action.enterpriseAccId || (this.chatDetail && this.chatDetail.enterpriseAccId) || '').trim()
+					const toAccid = String(action.personAccId || (this.chatDetail && this.chatDetail.personAccId) || '').trim()
+					if (!fromAccid || !toAccid) {
+						uni.showToast({ title: '未获取到举报所需的聊天账号', icon: 'none' })
+						return
+					}
+					const reportUrl = `https://www.texhr.cn/report/ChatReportView?FromAccid=${encodeURIComponent(fromAccid)}&ToAccid=${encodeURIComponent(toAccid)}&reportType=enterprise`
+					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
+						? window.open(reportUrl, '_blank') : null
+					if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
+					return
+				}
 				// 其它业务操作统一保留占位提示，避免误认为已经完成对应业务动作。
 				uni.showToast({ title: `${action.label}功能暂未接入`, icon: 'none' })
 			},
 			searchTalent() {
-				uni.showToast({
-					title: '搜索人才',
-					icon: 'none'
-				})
+				const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
+					? window.open('https://www.texhr.cn/ehr/resumesearch/', '_blank') : null
+				if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
 			}
 		}
 	}
