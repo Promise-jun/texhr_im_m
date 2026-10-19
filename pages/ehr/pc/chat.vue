@@ -80,6 +80,12 @@
 				</view>
 			</view>
 		</view>
+		<view v-if="reportModalVisible" class="report-modal-mask" @click="closeReportModal">
+			<view class="report-modal" @click.stop>
+				<button class="report-modal-close" aria-label="关闭举报窗口" title="关闭" @click="closeReportModal">×</button>
+				<iframe class="report-modal-frame" :src="reportModalUrl" title="举报" frameborder="0"></iframe>
+			</view>
+		</view>
 	</view>
 </template>
 
@@ -108,6 +114,8 @@
 				selectedId: '',
 				openingConversationId: '',
 				chatDetail: null,
+				reportModalVisible: false,
+				reportModalUrl: '',
 				pageVisible: false,
 				// 草稿以会话 ID 隔离，切换会话后仍可恢复，异步发送也不会清空其他会话的草稿。
 				conversationDrafts: {},
@@ -182,6 +190,8 @@
 		onUnload() {
 			this._conversationPageAlive = false
 			this.pageVisible = false
+			this.reportModalVisible = false
+			this.reportModalUrl = ''
 			this.cancelOpeningConversation()
 			this.unbindConversationEvents()
 			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
@@ -449,9 +459,8 @@
 						return
 					}
 					const reportUrl = `https://www.texhr.cn/report/ChatReportView?FromAccid=${encodeURIComponent(fromAccid)}&ToAccid=${encodeURIComponent(toAccid)}&reportType=enterprise`
-					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
-						? window.open(reportUrl, '_blank') : null
-					if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
+					this.reportModalUrl = reportUrl
+					this.reportModalVisible = true
 					return
 				}
 				// 其它业务操作统一保留占位提示，避免误认为已经完成对应业务动作。
@@ -461,6 +470,10 @@
 				const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
 					? window.open('https://www.texhr.cn/ehr/resumesearch/', '_blank') : null
 				if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
+			},
+			closeReportModal() {
+				this.reportModalVisible = false
+				this.reportModalUrl = ''
 			}
 		}
 	}
@@ -752,6 +765,61 @@
 		align-items: center;
 		flex-direction: column;
 		padding-top: 70px;
+	}
+
+	.report-modal-mask {
+		position: fixed;
+		z-index: 30;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(0, 0, 0, .32);
+	}
+
+	.report-modal {
+		position: relative;
+		box-sizing: border-box;
+		width: min(650px, calc(100vw - 80px));
+		height: min(400px, calc(100vh - 80px));
+		background: #fff;
+		box-shadow: 0 8px 28px rgba(0, 0, 0, .22);
+	}
+
+	.report-modal-frame {
+		display: block;
+		width: 100%;
+		height: 100%;
+		border: 0;
+		background: #fff;
+	}
+
+	.report-modal-close {
+		position: absolute;
+		top: -22px;
+		right: -42px;
+		z-index: 1;
+		width: 32px;
+		height: 32px;
+		padding: 0;
+		border: 0;
+		font-size: 32px;
+		font-weight: 300;
+		line-height: 30px;
+		color: #fff;
+		background: transparent;
+		cursor: pointer;
+	}
+
+	.report-modal-close::after {
+		border: 0;
+	}
+
+	.report-modal-close:hover {
+		color: #e8edf3;
 	}
 
 	.empty-image {

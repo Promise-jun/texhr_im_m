@@ -1212,12 +1212,12 @@
 	.composer-tool--button { width: auto; margin: 0; padding: 0; border: 0; border-radius: 0; line-height: normal;
 		background: transparent; &::after { border: 0; } }
 	.composer-tool--active { color: #0866d9; }
-	.composer-pin { justify-content: flex-start; width: 92px; height: 28px;
+	.composer-pin { justify-content: flex-start; width: auto; min-width: 60px; height: 28px;
 		&[disabled] { color: #a4abb4; cursor: default; }
 		&:focus-visible { outline: 2px solid #2b6cd4; outline-offset: 2px; } }
 	.tool-icon { margin-right: 4px; width: 18px; height: 18px; float: left; }
 	.toolbar-right { display: flex; align-items: center; gap: 16px; margin-left: auto; }
-	.more-menu-trigger { position: relative; display: flex; flex-shrink: 0; }
+	.more-menu-trigger { position: relative; display: flex; flex-shrink: 0; margin-left: -8px; }
 	.tool-more { justify-content: center; width: 28px; height: 28px; font-size: 20px;
 		&:focus-visible { outline: 2px solid #2b6cd4; outline-offset: 2px; } }
 	// 将菜单与按钮之间的间距包含在悬停区域内，鼠标移入菜单时不会意外收起。
