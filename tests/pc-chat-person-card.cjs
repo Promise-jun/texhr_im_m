@@ -40,6 +40,8 @@ const panel = {
   drafts: {},
   visible: true,
   opening: false,
+  _alive: true,
+  $nextTick(callback) { callback() },
   $set(object, key, value) { object[key] = value }
 }
 Object.assign(panel, definition.data.call(panel))
@@ -79,6 +81,15 @@ assert.equal(card.person.name, '智联叶子')
 assert.deepEqual(Array.from(card.person.meta), ['女', '24岁', '大专', '应届生'])
 assert.equal(card.person.jobName, '订珠工')
 assert.equal(card.person.location, '国外')
+assert.ok(!source.includes('人才简历已关联'))
+assert.ok(!source.includes('class="resume-card"'))
+
+panel._historyScrollAnchor = 'pc-msg-oldest'
+panel.handleMessageImageLoad()
+assert.equal(panel.scrollTarget, 'pc-msg-oldest')
+panel.scrollToBottom()
+assert.equal(panel.scrollTarget, 'pc-message-bottom')
+assert.equal(panel._historyScrollAnchor, '')
 
 panel.messages[0].attachment.raw = JSON.stringify({ type: 4, data: { Person: { PersonName: '王先生' } } })
 assert.equal(panel.displayMessages.find(message => message.id === 'person-card').type, 'person-card')

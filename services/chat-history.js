@@ -123,6 +123,41 @@ export async function getHistoryChatJobList(enterpriseAccId) {
 	}).filter(Boolean)
 }
 
+/** PC 实时聊天的职位切换列表：登录企业已由网关识别，不额外传 accid。 */
+export async function getPcHistoryChatJobList() {
+	const response = await requestApi({
+		Name: CHAT_GET_JOB_LIST_API,
+		Content: { Start: 0, pageSize: 50 }
+	})
+	if (!response || response.Code === undefined || Number(response.Code) !== 0) {
+		throw new Error(`获取职位列表失败，业务错误码：${response && response.Code !== undefined ? response.Code : 'unknown'}`)
+	}
+	let data = response.Data
+	if (typeof data === 'string') {
+		try { data = JSON.parse(data) } catch (error) { throw new Error('获取职位列表失败：接口 Data 不是有效 JSON') }
+	}
+	if (Array.isArray(data)) data = { Rows: data }
+	if (!data || typeof data !== 'object') data = response
+	if (data.Code !== undefined && Number(data.Code) !== 0) throw new Error('获取职位列表失败')
+	const rows = Array.isArray(data.Rows) ? data.Rows : Array.isArray(data.List) ? data.List
+		: Array.isArray(response.Rows) ? response.Rows : []
+	return rows.map((row, index) => {
+		if (!row || typeof row !== 'object' || Array.isArray(row)) return null
+		const jobId = accountId(row.JobId !== undefined ? row.JobId : row.Id !== undefined ? row.Id : row.ID)
+		if (!jobId) return null
+		return {
+			...row,
+			JobId: jobId,
+			key: `job-${jobId}-${index}`,
+			JobName: accountId(row.JobName !== undefined ? row.JobName : row.Name !== undefined ? row.Name
+				: row.PositionName !== undefined ? row.PositionName : row.Title) || '未命名职位',
+			Location: accountId(row.Location !== undefined ? row.Location : row.JobLocation !== undefined ? row.JobLocation
+				: row.WorkLocation !== undefined ? row.WorkLocation : row.Address !== undefined ? row.Address : row.Area) || '-',
+			Salary: accountId(row.Salary !== undefined ? row.Salary : row.SalaryText !== undefined ? row.SalaryText : row.Pay) || '-'
+		}
+	}).filter(Boolean)
+}
+
 function parseMessageData(value) {
 	if (value && typeof value === 'object' && !Array.isArray(value)) return value
 	if (typeof value !== 'string') return null
@@ -141,12 +176,44 @@ function mediaData(value) {
 	return attachment || parsed || { url: typeof value === 'string' ? value : '' }
 }
 
-/** 业务 MsgType=4/5 与云信 messageType=100 不同，但使用相同的职位卡片结构。 */
-function jobData(value) {
+/** 历史库 MsgType=4/5 可能包含云信自定义消息的 type/data 外壳。 */
+function businessMessageData(value) {
 	let parsed = parseMessageData(value)
 	if (parsed && parsed.data !== undefined) parsed = parseMessageData(parsed.data)
+	return parsed
+}
+
+function jobData(value) {
+	let parsed = businessMessageData(value)
 	if (parsed && parsed.Enterprise !== undefined) parsed = parseMessageData(parsed.Enterprise)
 	return parsed && (parsed.JobId || parsed.JobName) ? parsed : null
+}
+
+/** 企业 PC 端与实时聊天一致，从 type=4 的 Person 中读取人才信息，不补造简历字段。 */
+function historyPersonData(payload) {
+	const person = payload && parseMessageData(payload.Person)
+	if (!person) return null
+	const value = keys => {
+		for (const key of keys) {
+			const text = accountId(person[key])
+			if (text) return text
+		}
+		return ''
+	}
+	const gender = value(['Gender', 'GenderName', 'Sex', 'SexName']).toLowerCase()
+	const age = value(['Age', 'PersonAge'])
+	const name = value(['PersonName', 'RealName', 'Name', 'NickName', 'UserName'])
+	const meta = [
+		['1', '男', 'male', 'm'].includes(gender) ? '男' : ['2', '女', 'female', 'f'].includes(gender) ? '女' : '',
+		/^\d+$/.test(age) ? `${age}岁` : age,
+		value(['Education', 'EducationName', 'EducationalBackground', 'Degree', 'EduName']),
+		value(['Experience', 'WorkExperience', 'WorkYears', 'WorkingYears', 'WorkYear', 'WorkExperienceName'])
+	].filter(Boolean)
+	const jobName = value(['Post', 'JobName', 'Job', 'ExpectedJob', 'ExpectJob', 'Position', 'PositionName',
+		'IntentionalPosition', 'IntendedPosition', 'JobIntention', 'IntentionJob'])
+	const location = value(['Location', 'City', 'Address', 'AddressName', 'ExpectedLocation', 'ExpectLocation',
+		'JobLocation', 'WorkLocation', 'WorkCity', 'Area', 'IntentionCity'])
+	return name || meta.length || jobName || location ? { name: name || '人才信息', meta, jobName, location } : null
 }
 
 function formatHistoryTime(value) {
@@ -163,7 +230,7 @@ function formatHistoryTime(value) {
 	return date.getFullYear() === now.getFullYear() ? day : `${date.getFullYear()}年${day}`
 }
 
-export function normalizeHistoryMessage(row, index) {
+export function normalizeHistoryMessage(row, index, perspective = 'person') {
 	if (!row || typeof row !== 'object' || Array.isArray(row)) return null
 	const messageType = Number(row.MsgType)
 	const base = {
@@ -186,12 +253,25 @@ export function normalizeHistoryMessage(row, index) {
 				...base,
 				type: messageType === 2 ? 'image' : 'audio',
 				url,
+				mimeType: attachment.mimeType || attachment.contentType || attachment.mime || '',
+				// 保留媒体附件供 PC 播放器按 ext/name 判断无后缀下载地址的音频格式。
+				attachment: { ...attachment, url },
 				// 与 chat.vue 一致：网易云语音附件 duration 单位为毫秒。
 				durationSeconds: duration ? Math.max(1, Math.ceil(duration / 1000)) : 0
 			}
 		}
 	}
 	if (messageType === 4 || messageType === 5) {
+		// 个人端仍显示职位卡片；企业 PC 的 Person 卡片和职位切换提示单独解析。
+		if (perspective === 'enterprise') {
+			const payload = businessMessageData(row.Msg)
+			const person = messageType === 4 ? historyPersonData(payload) : null
+			if (person) return { ...base, type: 'person-card', person }
+			const enterprise = payload && (parseMessageData(payload.Enterprise) || payload)
+			if (messageType === 5 && enterprise && accountId(enterprise.Tips)) {
+				return { ...base, type: 'system', content: accountId(enterprise.Tips) }
+			}
+		}
 		const job = jobData(row.Msg)
 		if (job) return { ...base, type: 'job-card', job, customType: messageType }
 	}
@@ -203,7 +283,7 @@ export function normalizeHistoryMessage(row, index) {
 }
 
 /** 文档 2247：一次返回该会话全部 Rows，不接入 SDK 分页，也不发送初始化招呼语。 */
-export async function getHistoryChatMessages(fromAccid, toAccid) {
+export async function getHistoryChatMessages(fromAccid, toAccid, perspective = 'person') {
 	const from = accountId(fromAccid)
 	const to = accountId(toAccid)
 	if (!from || !to) throw new Error('未获取到会话账号信息')
@@ -215,5 +295,5 @@ export async function getHistoryChatMessages(fromAccid, toAccid) {
 	const data = responseData(response, '获取历史聊天记录')
 	if (!Array.isArray(data.Rows)) throw new Error('获取历史聊天记录失败：接口 Rows 格式不正确')
 	// 保留服务端返回的聊天顺序及每条记录的头像，不按 Accid 去重（同一人可发送多条消息）。
-	return data.Rows.map(normalizeHistoryMessage).filter(Boolean)
+	return data.Rows.map((row, index) => normalizeHistoryMessage(row, index, perspective)).filter(Boolean)
 }

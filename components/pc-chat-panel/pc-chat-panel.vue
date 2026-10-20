@@ -16,14 +16,6 @@
 				<view v-if="messages.length" class="history-state" @click="loadEarlierMessages(false)">
 					{{ isLoadingHistory ? '正在加载聊天记录...' : historyExhausted ? '没有更多消息了' : '加载更多消息' }}
 				</view>
-				<view class="resume-card">
-					<text class="resume-name">{{ otherUser.name || conversation.name }}</text>
-					<!-- GetSingleChat 只返回简历 ID，不返回年龄、学历等，未接入的资料不展示假数据。 -->
-					<view class="resume-meta">
-						<text v-if="genderLabel" class="resume-meta-item">{{ genderLabel }}</text>
-						<text class="resume-meta-item">人才简历已关联</text>
-					</view>
-				</view>
 				<view v-if="isCheckingAccess || (isLoadingHistory && !messages.length)" class="message-state">
 					正在加载聊天记录...
 				</view>
@@ -61,7 +53,7 @@
 							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
 						<view v-if="message.type === 'image'" class="message-bubble message-bubble--image"
 							@click="previewImage(message.url)">
-							<image :src="message.url" class="message-image" mode="widthFix" @load="scrollToBottom"></image>
+							<image :src="message.url" class="message-image" mode="widthFix" @load="handleMessageImageLoad"></image>
 						</view>
 						<button v-else-if="message.type === 'audio'" class="message-bubble message-bubble--audio"
 							:class="{ 'audio-active': audioActiveId === message.id }" :style="{ width: message.audioWidth }"
@@ -205,6 +197,8 @@
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const HISTORY_PAGE_SIZE = 50
 	const COMMON_LANGUAGE_GET_API = 'Chat.CommonLanguage.Get'
+	const CHAT_BUTTON_API = 'Chat.ChatButton.Get'
+	const UPGRADE_SERVICE_API = 'Enterprise.Service.UpGrade'
 	const JOB_LIST_GET_API = 'Chat.Chat.GetJobList'
 	const CHANGE_CHAT_JOB_API = 'Chat.Chat.ChangeJob'
 	const BLOCKED_USER_SEND_WARNING = '对方在您的黑名单中，无法回复您的消息'
@@ -343,7 +337,9 @@
 			detail: { type: Object, required: true },
 			drafts: { type: Object, required: true },
 			visible: { type: Boolean, default: true },
-			opening: { type: Boolean, default: false }
+			opening: { type: Boolean, default: false },
+			// 历史会话继续沟通已在进入实时面板前发送指定消息，避免再次发送默认招呼语。
+			skipGreeting: { type: Boolean, default: false }
 		},
 		data() {
 			return {
@@ -351,6 +347,8 @@
 				jobPickerVisible: false, isLoadingJobs: false, isSwitchingJob: false, jobList: [], jobListError: '',
 				messages: [], accessReady: false, isCheckingAccess: false, accessError: '',
 				isLoadingHistory: false, historyExhausted: false, historyError: '', scrollTarget: '',
+				// 分页插入旧消息后，图片异步加载不能把阅读位置重新拉到底部。
+				_historyScrollAnchor: '',
 				isSending: false, isComposing: false, selfUser: {}, otherUser: {}, failedAvatars: {},
 				audioActiveId: '', audioState: 'idle', audioDurations: {},
 				// 业务接口明确返回 false 时不能被云信旧缓存覆盖；未返回状态时才使用本地会话兜底。
@@ -381,7 +379,6 @@
 			},
 			selfAvatar() { return this.profileAvatar(this.selfUser.avatar) },
 			otherAvatar() { return this.profileAvatar(this.otherUser.avatar || this.conversation.avatar) },
-			genderLabel() { return { 1: '男', 2: '女' }[this.otherUser.gender] || '' },
 			displayMessages() {
 				const rows = []
 				let previousTime = 0
@@ -428,7 +425,11 @@
 				else if (this.accessReady) {
 					this.activateConversation()
 					this.loadEarlierMessages(true)
+					this.sendPendingChatGreeting()
 				}
+			},
+			opening(value) {
+				if (!value) this.sendPendingChatGreeting()
 			}
 		},
 		mounted() {
@@ -509,10 +510,15 @@
 					if (successStep) {
 						// 服务端返回后续操作提示时弹窗提醒，不再初始化消息或清除会话未读数。
 						this.accessReady = false
+						const stepName = String(successStep.StepName || '').trim()
 						uni.showModal({
 							content: String(successStep.Tips || ''),
-							confirmText: String(successStep.StepName || '确定'),
-							showCancel: false
+							confirmText: stepName || '确定',
+							showCancel: false,
+							success: result => {
+								// 确认后统一按 Limits.SuccessStep.StepName 执行页面跳转或升级申请。
+								if (result && result.confirm) return this.navigateByStep(stepName)
+							}
 						})
 						return
 					}
@@ -524,11 +530,151 @@
 					// 进入会话且通过沟通权限校验后获取常用语，不阻塞历史消息和用户资料加载。
 					this.loadCommonPhrases()
 					this.prepareConversation()
+					// SuccessStep 优先处理；Limits 的会话职位与页面职位不一致时，询问是否切换到页面职位。
+					const returnedJobIdValue = data.JobId !== undefined ? data.JobId : response.JobId
+					const returnedJobId = returnedJobIdValue === undefined || returnedJobIdValue === null
+						? '' : String(returnedJobIdValue).trim()
+					const currentJobId = String(this.jobId || '').trim()
+					if (returnedJobId && currentJobId && returnedJobId !== currentJobId) {
+						uni.showModal({
+							title: '提示',
+							content: '是否切换聊天职位',
+							confirmText: '立即切换',
+							cancelText: '取消',
+							showCancel: true,
+							success: result => {
+								if (!result || !result.confirm || !this._alive
+									|| String(this.jobId || '').trim() !== currentJobId) return
+								// 切换目标是当前页面职位；成功后只追加 type=5 自定义消息，不重新加载历史消息。
+								return this.selectJob({
+									jobId: currentJobId,
+									name: this.detail.jobName || '',
+									location: this.detail.jobLocation || '',
+									salary: this.detail.jobSalary || ''
+								}, { previousJobId: returnedJobId })
+							}
+						})
+					} else if (returnedJobId && returnedJobId === currentJobId) {
+						// 职位一致且 Limits.Message 有内容时，才获取当前简历对应的默认招呼语。
+						const limitsMessage = data.Message !== undefined ? data.Message : response.Message
+						const hasMessage = typeof limitsMessage === 'string' ? Boolean(limitsMessage.trim())
+							: limitsMessage !== undefined && limitsMessage !== null
+						if (hasMessage && !this.skipGreeting) await this.loadChatGreeting(limitsMessage, currentJobId)
+					}
 				} catch (error) {
 					if (this._alive) this.accessError = error.message || '聊天加载失败'
 				} finally {
 					if (this._alive) this.isCheckingAccess = false
 				}
+			},
+			navigateByStep(stepName) {
+				if (!this._alive || !this.visible || this.opening) return
+				const name = String(stepName || '').trim()
+				if (['升级', '立即升级', '立即开通'].includes(name)) return this.requestChatUpgrade()
+				if (name === '立即上传') {
+					// 资质上传直接在用户点击确认时打开新窗口，保留当前聊天页面。
+					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
+						? window.open('https://www.texhr.cn/ehr/qualification/', '_blank') : null
+					if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
+				}
+			},
+			async requestChatUpgrade() {
+				if (this._chatUpgradePromise) return this._chatUpgradePromise
+				const conversationId = this.conversationId, enterpriseAccId = this.enterpriseAccId
+				const isCurrent = () => this._alive && this.visible && !this.opening
+					&& this.conversationId === conversationId && this.enterpriseAccId === enterpriseAccId
+				if (!isCurrent()) return
+				this._chatUpgradePromise = (async () => {
+					try {
+						// 文档 1504：三个升级入口共用订购服务接口，Type=9 表示直聊数量。
+						const response = await requestApi({ Name: UPGRADE_SERVICE_API, Content: { Type: 9 } })
+						if (!isCurrent()) return
+						if (!response || Number(response.Code) !== 0) throw new Error('提交升级申请失败，请重试')
+						const data = response.Data === undefined || response.Data === null || response.Data === ''
+							? {} : parseObject(response.Data)
+						if (!data || (data.Code !== undefined && Number(data.Code) !== 0)) {
+							throw new Error('升级申请返回的数据格式不正确')
+						}
+						const tips = data.Tips !== undefined ? data.Tips : response.Tips
+						uni.showModal({
+							title: '提示', content: String(tips === undefined || tips === null ? '' : tips),
+							confirmText: '确定', showCancel: false,
+							success: result => {
+								// 升级申请成功后仅在用户确认 Tips 时返回上一页，旧会话回调不再触发跳转。
+								if (result && result.confirm && isCurrent()) this.navigateBack()
+							}
+						})
+					} catch (error) {
+						if (isCurrent()) uni.showToast({ title: error.message || '提交升级申请失败，请重试', icon: 'none' })
+					}
+				})().finally(() => { this._chatUpgradePromise = null })
+				return this._chatUpgradePromise
+			},
+			navigateBack() {
+				// PC 聊天页可从站外进入，优先使用浏览器历史返回上一页。
+				// #ifdef H5
+				if (typeof window !== 'undefined' && window.history && typeof window.history.back === 'function') {
+					window.history.back()
+					return
+				}
+				// #endif
+				uni.navigateBack({ delta: 1 })
+			},
+			isCurrentChatGreeting(greeting) {
+				return Boolean(greeting && this._alive && this.accessReady
+					&& this.conversationId === greeting.conversationId
+					&& this.personAccId === greeting.personAccId && this.enterpriseAccId === greeting.enterpriseAccId
+					&& String(this.jobId || '').trim() === greeting.jobId
+					&& String(this.resumeId || '').trim() === greeting.resumeId)
+			},
+			async loadChatGreeting(limitsMessage, jobId) {
+				const greeting = { limitsMessage, jobId, resumeId: String(this.resumeId || '').trim(),
+					conversationId: this.conversationId, personAccId: this.personAccId, enterpriseAccId: this.enterpriseAccId,
+					customSent: false, textSent: false }
+				if (!greeting.resumeId || !this.isCurrentChatGreeting(greeting)) return
+				// 同一聊天实例保留两条消息的发送进度，重连或重试不能重复发送已经成功的消息。
+				if (this.isCurrentChatGreeting(this._chatGreeting)) return this.sendPendingChatGreeting()
+				try {
+					// 文档 2259：PC 企业端传入当前简历 ResumeId，读取 Chat.ChatButton.Get 的 Greetings。
+					const response = await requestApi({ Name: CHAT_BUTTON_API, Content: { ResumeId: greeting.resumeId } })
+					if (!this.isCurrentChatGreeting(greeting)) return
+					if (!response || Number(response.Code) !== 0) throw new Error('获取默认招呼语失败')
+					const data = typeof response.Data === 'string' ? JSON.parse(response.Data) : response.Data
+					if (!data || typeof data !== 'object' || Array.isArray(data)
+						|| (data.Code !== undefined && Number(data.Code) !== 0)) throw new Error('默认招呼语数据格式不正确')
+					const greetings = data.Greetings !== undefined ? data.Greetings : response.Greetings
+					const greetingText = greetings === undefined || greetings === null ? '' : String(greetings)
+					if (!greetingText.trim()) throw new Error('未获取到默认招呼语 Greetings')
+					this._chatGreeting = { ...greeting, greetingText }
+					// 云信尚未登录或正在发送其它消息时暂存，服务恢复后继续，不额外读取历史消息。
+					await this.sendPendingChatGreeting()
+				} catch (error) {
+					// 招呼语请求失败不阻断聊天记录与常用语加载，也不向已关闭或已切换的会话发送消息。
+					if (this.isCurrentChatGreeting(greeting) && this.visible && !this.opening) {
+						uni.showToast({ title: error.message || '获取默认招呼语失败', icon: 'none' })
+					}
+				}
+			},
+			async sendPendingChatGreeting() {
+				if (this._chatGreetingSendPromise) return this._chatGreetingSendPromise
+				const greeting = this._chatGreeting
+				if (!this.isCurrentChatGreeting(greeting) || greeting.textSent || !this.canSendText || !isNimLoggedIn()) return
+				this._chatGreetingSendPromise = (async () => {
+					// 必须先成功发送 { type: 4, data: Limits.Message }；保留 Message 原对象/字符串，不重新解析。
+					if (!greeting.customSent) {
+						const sent = await this.sendNimMessage(nim => nim.V2NIMMessageCreator.createCustomMessage('',
+							JSON.stringify({ type: 4, data: greeting.limitsMessage })), undefined,
+							() => this.isCurrentChatGreeting(greeting))
+						if (!sent) return
+						greeting.customSent = true
+					}
+					// 自定义消息回执成功后再发送 Greetings 文本，发送期间切换会话时不再继续。
+					if (!this.isCurrentChatGreeting(greeting) || !this.canSendText || !isNimLoggedIn()) return
+					const sent = await this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(greeting.greetingText),
+						undefined, () => this.isCurrentChatGreeting(greeting))
+					if (sent) greeting.textSent = true
+				})().finally(() => { this._chatGreetingSendPromise = null })
+				return this._chatGreetingSendPromise
 			},
 			prepareConversation() {
 				if (!isNimLoggedIn()) {
@@ -540,8 +686,10 @@
 				this.loadEarlierMessages(true)
 			},
 			handleLoginStatus(status) {
-				if (status === 1 && this.accessReady) this.prepareConversation()
-				else if (status !== 1) {
+				if (status === 1 && this.accessReady) {
+					this.prepareConversation()
+					this.sendPendingChatGreeting()
+				} else if (status !== 1) {
 					// 断线后旧黑名单缓存不可用于写入，重新登录并展开菜单时再查询。
 					this.blockStatusLoaded = false
 					this.releaseCurrentConversation()
@@ -627,7 +775,10 @@
 						this.historyExhausted = list.length < HISTORY_PAGE_SIZE
 					}
 					if (initial) this.scrollToBottom()
-					else if (anchor) this.scrollToAnchor(this.messageAnchor(messageId(anchor)))
+					else if (anchor) {
+						this._historyScrollAnchor = this.messageAnchor(messageId(anchor))
+						this.scrollToAnchor(this._historyScrollAnchor)
+					}
 				} catch (error) {
 					if (this._alive) this.historyError = error.message || '聊天记录加载失败'
 				} finally {
@@ -646,8 +797,14 @@
 				// 隐藏期间可以缓存消息，但不能标已读；返回页面后再统一清除未读。
 				if (this.visible) { this.markRead(); this.scrollToBottom() }
 			},
+			handleMessageImageLoad() {
+				// 历史分页期间，图片尺寸变化只需回到旧消息锚点；正常聊天仍滚到底部。
+				if (this._historyScrollAnchor) this.scrollToAnchor(this._historyScrollAnchor)
+				else this.scrollToBottom()
+			},
 			messageAnchor(id) { return `pc-msg-${encodeURIComponent(id).replace(/%/g, '_')}` },
 			scrollToAnchor(id) {
+				if (id === 'pc-message-bottom') this._historyScrollAnchor = ''
 				this.scrollTarget = ''
 				this.$nextTick(() => { if (this._alive) this.scrollTarget = id })
 			},
@@ -828,12 +985,14 @@
 					if (this._alive) this.isLoadingJobs = false
 				}
 			},
-			async selectJob(job) {
+			async selectJob(job, options = {}) {
 				if (!job || !this._alive || !this.visible || this.opening || this.isSwitchingJob) return
 				const targetJobId = responseValue(job, ['jobId', 'JobId', 'id', 'Id'])
 				if (!targetJobId) return
-				const currentJobId = String(this.jobId || '').trim()
-				if (targetJobId === currentJobId) {
+				// Limits 提示切换时，旧职位使用接口返回值，不能把页面职位误判为已经切换成功。
+				const previousJobId = options.previousJobId === undefined || options.previousJobId === null
+					? String(this.jobId || '').trim() : String(options.previousJobId).trim()
+				if (targetJobId === previousJobId) {
 					this.closeJobPicker()
 					uni.showToast({ title: '该职位是当前沟通职位，无需切换', icon: 'none' })
 					return
@@ -852,6 +1011,7 @@
 						PersonAccId: this.personAccId, EnterpriseAccId: this.enterpriseAccId,
 						JobId: targetJobId, IsMessage: true
 					} })
+					if (!this._alive) return
 					if (!response || Number(response.Code) !== 0) throw new Error('切换聊天职位失败')
 					let data = response.Data
 					if (typeof data === 'string') data = JSON.parse(data)
@@ -880,6 +1040,7 @@
 					const result = await messageService.sendMessage(customMessage, this.conversationId)
 					if (!result || !result.message) throw new Error('职位切换自定义消息发送失败')
 					if (!this._alive) return
+					// 仅合并新消息回执，保留已有消息与历史分页锚点，不重新初始化或读取历史消息。
 					this.mergeMessages([result.message])
 					this.scrollToBottom()
 					this.$emit('changed')
@@ -894,7 +1055,7 @@
 							this.jobName = switchedJob.name || this.jobName
 							this.closeJobPicker()
 							this.$emit('action', { key: 'job-switched', label: '选择职位', job: switchedJob,
-								enterprise, jobId: targetJobId, previousJobId: currentJobId, conversationId: this.conversationId })
+								enterprise, jobId: targetJobId, previousJobId, conversationId: this.conversationId })
 						}
 					}
 				}
@@ -973,7 +1134,7 @@
 					return false
 				}
 			},
-			async sendNimMessage(createMessage, draftSnapshot) {
+			async sendNimMessage(createMessage, draftSnapshot, isCurrent = () => true) {
 				// 与消息类型无关的发送入口：统一查询、发送锁、错误码提示和成功回执处理。
 				if (!this._alive || !this.canSendText || typeof createMessage !== 'function') return false
 				if (!this.conversationId || !isNimLoggedIn()) {
@@ -987,7 +1148,7 @@
 					const nim = getNimInstance()
 					await this.checkOtherBlockedBeforeSend(nim, personAccId)
 					// 查询期间可能切换会话或关闭页面，不能在旧面板查询完成后继续发消息。
-					if (!this._alive || !this.visible || this.opening || !this.accessReady ||
+					if (!isCurrent() || !this._alive || !this.visible || this.opening || !this.accessReady ||
 						this.conversationId !== conversationId || this.personAccId !== personAccId) return false
 					if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪')
 					const result = await nim.V2NIMMessageService.sendMessage(createMessage(nim), conversationId)
@@ -1007,7 +1168,11 @@
 						this.personAccId === personAccId) uni.showToast({ title: getSendFailureMessage(error), icon: 'none' })
 					return false
 				} finally {
-					if (this._alive) this.isSending = false
+					if (this._alive) {
+						this.isSending = false
+						// 普通消息占用发送锁时，等待其完成后继续暂存的招呼语；招呼语内部不递归触发。
+						if (!this._chatGreetingSendPromise) this.sendPendingChatGreeting()
+					}
 				}
 			},
 			async togglePinned() {
@@ -1101,6 +1266,7 @@
 			},
 			emitAction(key, label) {
 				if (key === 'switch-job') return this.switchJob()
+				if (key === 'publish-job') this.closeJobPicker()
 				// 所有业务操作统一携带当前职位与简历，后续接入页面时无需重新猜测对应关系。
 				this.$emit('action', { key, label, jobId: this.jobId, resumeId: this.resumeId,
 					personAccId: this.personAccId, enterpriseAccId: this.enterpriseAccId, chatByQRcode: this.detail.chatByQRcode })
@@ -1141,11 +1307,6 @@
 	.resume-link { margin-left: auto; }
 	.message-scroll { flex: 1; height: 0; min-height: 0; }
 	.message-content { box-sizing: border-box; padding: 20px 24px 0; }
-	.resume-card { box-sizing: border-box; min-height: 102px; padding: 16px 14px; margin: 12px 0 22px;
-		border: 1px solid #f1f2f3; box-shadow: 0 1px 2px rgba(0, 0, 0, .05); }
-	.resume-name { display: block; font-size: 16px; line-height: 24px; color: #2682e6; }
-	.resume-meta { display: flex; align-items: center; margin-top: 8px; font-size: 13px; color: #8c949c;
-		.resume-meta-item + .resume-meta-item { margin-left: 12px; padding-left: 12px; border-left: 1px solid #e5e8eb; } }
 	.history-state, .message-state, .time-divider { text-align: center; font-size: 12px; line-height: 20px; color: #a1a6aa; }
 	.history-state { padding-bottom: 4px; cursor: pointer; }
 	.message-state { padding: 22px 0; }

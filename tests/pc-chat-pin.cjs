@@ -45,7 +45,7 @@ function environment(options = {}) {
     } }
   }
   const globals = { console: { error: (...args) => logs.push(args), warn() {} },
-    getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn, NIM_EMOJIS: [], PcChatPanel: {},
+    getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn, NIM_EMOJIS: [], PcChatPanel: {}, PcChatHistoryPanel: {},
     requestApi: args => { calls.push(args); return request(args) },
     uni: { showToast: value => toasts.push(value.title), showModal() {} } }
   const serviceContext = vm.createContext(globals)
