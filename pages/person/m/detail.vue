@@ -564,7 +564,7 @@
 		line-height: 1.6;
 		color: #a0a4a8;
 	}
-	.load-status.is-error { color: #2399ed; }
+	.load-status.is-error { color: #f37324; }
 	.time-divider { padding: 12rpx 0 36rpx; text-align: center; font-size: 24rpx; color: #a8a8a8; }
 	.message-row {
 		display: flex;
@@ -584,7 +584,7 @@
 	}
 	.message-row.other {
 		.message-avatar { margin-right: 28rpx; }
-		.message-bubble { background: #2399ed; color: #ffffff; }
+		.message-bubble { background: #f37324; color: #ffffff; }
 	}
 	.message-row.self {
 		flex-direction: row-reverse;
@@ -631,11 +631,11 @@
 		height: 72rpx;
 		line-height: 72rpx;
 		border-radius: 8rpx;
-		background: #2399ed;
+		background: #f37324;
 		color: #ffffff;
 		font-size: 26rpx;
 		&::after { border: 0; }
-		&[disabled] { background: #a9d6f5; color: #ffffff; }
+		&[disabled] { background: #f6c09f; color: #ffffff; }
 	}
 	.job-picker-sheet { padding: 0 28rpx 16rpx; background: #ffffff; border-radius: 20rpx 20rpx 0 0; }
 	.job-picker-heading { display: flex; align-items: center; justify-content: space-between; height: 108rpx; }
@@ -644,5 +644,5 @@
 	.job-picker-list { height: 50vh; }
 	.job-picker-item { padding: 28rpx 0; border-bottom: 1rpx solid #eeeeee; font-size: 28rpx; line-height: 1.6; color: #333333; word-break: break-all; }
 	.job-picker-status { padding: 60rpx 0; text-align: center; font-size: 26rpx; line-height: 1.6; color: #999999; }
-	.job-picker-status--error { color: #2399ed; }
+	.job-picker-status--error { color: #f37324; }
 </style>

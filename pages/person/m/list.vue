@@ -846,7 +846,7 @@
 						left: 50%;
 						width: 70rpx;
 						height: 4rpx;
-						background: #1d9bf0;
+						background: #f37324;
 						border-radius: 4rpx;
 						content: '';
 						transform: translateX(-50%);
@@ -1009,7 +1009,7 @@
 				color: #999999;
 
 				&.is-error {
-					color: #1d9bf0;
+					color: #f37324;
 				}
 			}
 		}

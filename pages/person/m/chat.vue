@@ -3527,7 +3527,7 @@
 				right: -4rpx;
 				width: 12rpx;
 				height: 12rpx;
-				background: #2399ed;
+				background: #f37324;
 				border: 2rpx solid #ffffff;
 				border-radius: 50%;
 			}
@@ -3569,7 +3569,7 @@
 		color: #a0a4a8;
 
 		&.load-status--error {
-			color: #2399ed;
+			color: #f37324;
 		}
 	}
 
@@ -3630,7 +3630,7 @@
 
 	.revoked-message-edit {
 		margin-left: 8rpx;
-		color: #2399ed;
+		color: #f37324;
 	}
 
 	.message-row {
@@ -3722,7 +3722,7 @@
 			}
 
 			.message-bubble {
-				background: #2399ed;
+				background: #f37324;
 				color: #ffffff;
 			}
 		}
@@ -3905,7 +3905,7 @@
 			font-size: 24rpx;
 			line-height: 68rpx;
 			color: #ffffff;
-			background: #2399ed;
+			background: #f37324;
 			border: none;
 			border-radius: 8rpx;
 
@@ -3919,7 +3919,7 @@
 
 			&[disabled] {
 				color: #ffffff;
-				background: #8bc9f3;
+				background: #f6c09f;
 			}
 		}
 
@@ -4291,7 +4291,7 @@
 			border-radius: 10rpx;
 
 			&.phrase-status--error {
-				color: #2399ed;
+				color: #f37324;
 			}
 		}
 
@@ -4466,7 +4466,7 @@
 			align-items: center;
 			justify-content: center;
 			font-size: 30rpx;
-			color: #2399ed;
+			color: #f37324;
 
 			&+.quick-reply-button {
 				border-left: 1rpx solid #eeeeee;
@@ -4587,7 +4587,7 @@
 			}
 
 			&.send-resume-button--confirm {
-				color: #2399ed;
+				color: #f37324;
 			}
 		}
 	}

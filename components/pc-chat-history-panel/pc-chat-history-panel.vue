@@ -202,7 +202,7 @@
 	.history-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; color: #51565b; background: #fff; }
 	.history-header { position: relative; display: flex; align-items: center; justify-content: center; flex-shrink: 0; height: 49px; border-bottom: 1px solid #f0f1f2; }
 	.history-title { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
-	.resume-link { position: absolute; right: 20px; padding: 0; margin: 0; background: transparent; color: #1672d9; line-height: 30px; font-size: 12px; cursor: pointer; }
+	.resume-link { position: absolute; right: 20px; padding: 0; margin: 0; background: transparent; color: #f37324; line-height: 30px; font-size: 12px; cursor: pointer; }
 	button::after { border: 0; }
 	.resume-link[disabled] { background: transparent; color: #aeb5bc; }
 	.history-scroll { flex: 1; height: 0; min-height: 0; }
@@ -211,7 +211,7 @@
 	.history-error { color: #e06a2c; cursor: pointer; }
 	.time-divider, .system-message { margin: 18px 0; text-align: center; color: #a6a6a6; font-size: 12px; line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.person-card { padding: 16px 14px; border: 1px solid #f1f1f1; box-shadow: 0 1px 3px rgba(0,0,0,.03); cursor: pointer; }
-	.person-name { display: block; color: #1672d9; font-size: 14px; line-height: 24px; }
+	.person-name { display: block; color: #f37324; font-size: 14px; line-height: 24px; }
 	.person-meta { display: flex; flex-wrap: wrap; margin-top: 6px; color: #7f858b; font-size: 13px; }
 	.person-meta-item + .person-meta-item { margin-left: 10px; padding-left: 10px; border-left: 1px solid #e8e8e8; }
 	.person-intention { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 8px; color: #7f858b; font-size: 13px; }

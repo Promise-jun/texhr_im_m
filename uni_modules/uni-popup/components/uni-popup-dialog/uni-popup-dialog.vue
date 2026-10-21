@@ -299,7 +299,7 @@
 	}
 
 	.uni-button-color {
-		color: #007aff;
+		color: #f37324;
 	}
 
 	.uni-dialog-input {

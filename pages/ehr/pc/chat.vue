@@ -148,6 +148,8 @@
 			return {
 				activeMainTab: 'recent',
 				activeMessageTab: 'all',
+				// 外部链接可通过 personAccId 指定进入某个人才的实时会话。
+				routePersonAccId: '',
 				selectedId: '',
 				openingConversationId: '',
 				chatDetail: null,
@@ -219,6 +221,7 @@
 				if (this.activeMessageTab === 'unread') {
 					return this.conversations.filter(conversation => conversation.unreadCount > 0)
 				}
+				console.log(112233, this.conversations)
 				return this.conversations
 			},
 			visibleIsLoading() {
@@ -228,22 +231,28 @@
 				return this.activeMainTab === 'history' ? this.historyLoadError : this.loadError
 			}
 		},
-		onLoad() {
+		onLoad(options = {}) {
 			this._conversationPageAlive = true
 			this._historyConversationsLoaded = false
 			this._openConversationRequestId = 0
 			this._continueHistoryRequestId = 0
+			this._routeConversationPromise = null
+			this._routeConversationOpened = false
+			// uni-app 会把 URL 查询参数传给 onLoad；兼容大小写，方便外部链接传参。
+			this.routePersonAccId = String(options.personAccId || options.PersonAccId || '').trim()
 			this.bindConversationEvents()
 		},
 		onShow() {
 			this.pageVisible = true
 			// 页面恢复显示时主动刷新，覆盖页面隐藏期间发生的会话变化。
 			this.currentTime = Date.now()
-			this.loadConversations()
+			if (this.routePersonAccId) this.openRouteConversationAfterLoad()
+			else this.loadConversations()
 			this.loadHistoryConversations()
 		},
 		onHide() {
 			this.pageVisible = false
+			if (this._routeConversationPromise) this._routeConversationRetryAfterHide = true
 			this.cancelOpeningConversation()
 			this.cancelContinueHistory()
 		},
@@ -287,6 +296,8 @@
 				if (status !== 1) return
 				this.scheduleConversationReload()
 				this.loadHistoryConversations()
+				// 页面可能先于云信登录完成显示；登录成功后重新尝试打开路由指定的会话。
+				this.openRouteConversationAfterLoad()
 			},
 			handleNimLoginFailed(error) {
 				this.handleConversationLoadFailed(error)
@@ -401,6 +412,73 @@
 					})
 
 				return this._conversationLoadPromise
+			},
+			async openRouteConversationAfterLoad() {
+				if (!this.routePersonAccId || !this._conversationPageAlive || !this.pageVisible
+					|| !isNimLoggedIn() || this._routeConversationOpened || this._routeConversationPromise) return
+
+				// 等 SDK 会话列表完成后再查找，避免列表尚未返回时误判为新会话。
+				this._routeConversationRetryAfterHide = false
+				this._routeConversationPromise = Promise.resolve(this._conversationLoadPromise || this.loadConversations())
+					.then(() => {
+						if (!this._conversationPageAlive || !this.pageVisible || this._routeConversationOpened) return
+						this.activeMainTab = 'recent'
+						this.activeMessageTab = 'all'
+
+						const targetId = this.routePersonAccId
+						const existing = this.conversations.find(conversation => conversation.type === 1
+							&& String(conversation.targetId || '').trim() === targetId)
+						// 列表没有该人才时仍创建临时 P2P 会话；GetSingleChat 会补齐职位和简历信息。
+						const conversation = existing || this.createRouteConversation(targetId)
+						if (!conversation) return
+						return this.selectConversation(conversation).then(() => {
+							if (this.chatDetail && this.chatDetail.conversationId === conversation.id) {
+								this._routeConversationOpened = true
+								// 云信创建事件到达前先把新会话加入列表，保证选中状态可见。
+								if (!existing) this.upsertConversations([conversation])
+							}
+						})
+					})
+					.catch(error => {
+						if (this._conversationPageAlive && this.pageVisible) {
+							console.warn('[NIM] 自动打开指定会话失败', error)
+						}
+					})
+					.finally(() => {
+						this._routeConversationPromise = null
+						if (this._routeConversationRetryAfterHide && this._conversationPageAlive
+							&& this.pageVisible && !this._routeConversationOpened) {
+							this.openRouteConversationAfterLoad()
+						}
+					})
+				return this._routeConversationPromise
+			},
+			createRouteConversation(personAccId) {
+				if (!personAccId) return null
+				let conversationId = ''
+				try {
+					const util = getNimInstance().V2NIMConversationIdUtil
+					if (util && typeof util.p2pConversationId === 'function') {
+						conversationId = String(util.p2pConversationId(personAccId) || '').trim()
+					}
+				} catch (error) {
+					// SDK 工具短暂不可用时保留账号作为兜底 ID，登录完成后仍可重试加载。
+				}
+				if (!conversationId) conversationId = personAccId
+				return {
+					id: conversationId,
+					conversationId,
+					targetId: personAccId,
+					type: 1,
+					name: personAccId,
+					avatar: DEFAULT_AVATAR,
+					message: '暂无消息',
+					time: '',
+					stickTop: false,
+					mute: false,
+					unreadCount: 0,
+					unreadText: '0'
+				}
 			},
 			async loadHistoryConversations() {
 				if (!this._conversationPageAlive || this._historyConversationsLoaded) return
@@ -774,6 +852,12 @@
 					this.reportModalVisible = true
 					return
 				}
+				if (action && action.key === 'phrase-settings') {
+					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
+						? window.open('http://www.texhr.cn/ehr/chat/template/', '_blank') : null
+					if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
+					return
+				}
 				// 其它业务操作统一保留占位提示，避免误认为已经完成对应业务动作。
 				uni.showToast({ title: `${action.label}功能暂未接入`, icon: 'none' })
 			},
@@ -839,7 +923,7 @@
 		cursor: pointer;
 
 		&.main-tab--active {
-			color: #0866d9;
+			color: #f37324;
 			background: #eef0f2;
 			border-radius: 14px 14px 0 0;
 		}
@@ -902,7 +986,7 @@
 		cursor: pointer;
 
 		&.message-tab--active {
-			color: #126bd1;
+			color: #f37324;
 
 			&::after {
 				position: absolute;
@@ -911,7 +995,7 @@
 				width: 14px;
 				height: 2px;
 				content: '';
-				background: #086ee5;
+				background: #f37324;
 				transform: translateX(-50%);
 			}
 		}
@@ -954,11 +1038,11 @@
 
 		&:hover,
 		&.conversation-item--selected {
-			background: #f8fbfe;
+			background: #fff8f3;
 		}
 
 		&.conversation-item--opening {
-			background: #eef6ff;
+			background: #ffefe4;
 			cursor: progress;
 		}
 	}
@@ -1047,7 +1131,7 @@
 		color: #a4a9ae;
 
 		&.conversation-empty--error {
-			color: #126bd1;
+			color: #f37324;
 			cursor: pointer;
 		}
 	}
@@ -1156,16 +1240,16 @@
 		height: 36px;
 		margin-top: 20px;
 		padding: 0 18px;
-		border: 1px solid #126bd1;
+		border: 1px solid #f37324;
 		border-radius: 3px;
 		font-size: 14px;
 		line-height: 34px;
 		color: #fff;
-		background: #126bd1;
+		background: #f37324;
 		cursor: pointer;
 	}
 	.history-job-publish-button::after { border: 0; }
-	.history-job-publish-button:hover { background: #0b5dbd; }
+	.history-job-publish-button:hover { background: #d95f0b; }
 	.history-job-picker-error { color: #c65d5d; cursor: pointer; }
 	.history-job-picker-list { max-height: 420px; }
 	.history-job-picker-item {
@@ -1183,7 +1267,7 @@
 		cursor: pointer;
 	}
 	.history-job-picker-item::after { border: 0; }
-	.history-job-picker-item:hover { background: #f7faff; }
+	.history-job-picker-item:hover { background: #fff6f0; }
 	.history-job-picker-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #333b42; }
 	.history-job-picker-detail { flex: 0 0 auto; max-width: 58%; margin-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #7d8790; }
 
