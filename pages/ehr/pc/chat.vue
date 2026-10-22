@@ -61,13 +61,15 @@
 				</view>
 
 				<view class="chat-content">
-					<!-- 只有业务接口成功后才创建聊天组件，显式传入职位、简历及双方云信账号。 -->
+					<!-- 详情具备职位/简历上下文后创建聊天组件；外链首个 Limits 响应由组件统一展示结果。 -->
 					<pc-chat-panel v-if="chatDetail && activeMainTab === 'recent'" :key="chatDetail.conversationId"
 						:conversation="activeConversation" :job-id="chatDetail.jobId" :resume-id="chatDetail.resumeId"
 						:person-acc-id="chatDetail.personAccId" :enterprise-acc-id="chatDetail.enterpriseAccId"
+						:initial-access="chatDetail.initialAccess"
 						:detail="chatDetail" :drafts="conversationDrafts" :visible="pageVisible"
 						:skip-greeting="Boolean(chatDetail.skipGreeting)"
 						:opening="Boolean(openingConversationId)" @read="handleConversationRead"
+						@access-consumed="handleInitialAccessConsumed"
 						@changed="scheduleConversationReload" @pin-changed="handleConversationPinChanged" @action="handleChatAction" />
 					<!-- 历史页只读：详情接口成功后才挂载，组件再按企业→人才方向请求全部聊天记录。 -->
 					<pc-chat-history-panel v-else-if="historyChatDetail && activeMainTab === 'history'"
@@ -141,6 +143,8 @@
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const CONTINUE_CHAT_TEXT = '好久没互动了，我对你简历很感兴趣，快来聊聊~'
 	const PC_JOB_LIST_API = 'Chat.Chat.GetJobList'
+	const CHAT_DELETE_API = 'Chat.Chat.Delete'
+	const EXPIRED_ROUTE_MESSAGE = '该会话已经过期，请重新在简历页面发起会话!'
 
 	export default {
 		components: { PcChatPanel, PcChatHistoryPanel },
@@ -150,6 +154,12 @@
 				activeMessageTab: 'all',
 				// 外部链接可通过 personAccId 指定进入某个人才的实时会话。
 				routePersonAccId: '',
+				// messageExisted=false 且本地列表没有会话时，使用 URL 中的职位/简历先做权限校验。
+				routeMessageExisted: false,
+				// 仅在 URL 明确传入 messageExisted 时切换外链分支；未传入时保留原有打开逻辑。
+				routeMessageExistedProvided: false,
+				routeJobId: '',
+				routeResumeId: '',
 				selectedId: '',
 				openingConversationId: '',
 				chatDetail: null,
@@ -221,7 +231,6 @@
 				if (this.activeMessageTab === 'unread') {
 					return this.conversations.filter(conversation => conversation.unreadCount > 0)
 				}
-				console.log(112233, this.conversations)
 				return this.conversations
 			},
 			visibleIsLoading() {
@@ -238,12 +247,20 @@
 			this._continueHistoryRequestId = 0
 			this._routeConversationPromise = null
 			this._routeConversationOpened = false
+			this._expiredRouteNoticePending = false
 			// uni-app 会把 URL 查询参数传给 onLoad；兼容大小写，方便外部链接传参。
 			this.routePersonAccId = String(options.personAccId || options.PersonAccId || '').trim()
+			const messageExistedOption = options.messageExisted === undefined
+				? options.MessageExisted : options.messageExisted
+			this.routeMessageExistedProvided = messageExistedOption !== undefined
+			this.routeMessageExisted = ['true', '1'].includes(String(messageExistedOption).trim().toLowerCase())
+			this.routeJobId = String(options.jobId || options.JobId || '').trim()
+			this.routeResumeId = String(options.resumeId || options.ResumeId || '').trim()
 			this.bindConversationEvents()
 		},
 		onShow() {
 			this.pageVisible = true
+			this.showExpiredRouteNotice()
 			// 页面恢复显示时主动刷新，覆盖页面隐藏期间发生的会话变化。
 			this.currentTime = Date.now()
 			if (this.routePersonAccId) this.openRouteConversationAfterLoad()
@@ -420,18 +437,31 @@
 				// 等 SDK 会话列表完成后再查找，避免列表尚未返回时误判为新会话。
 				this._routeConversationRetryAfterHide = false
 				this._routeConversationPromise = Promise.resolve(this._conversationLoadPromise || this.loadConversations())
-					.then(() => {
-						if (!this._conversationPageAlive || !this.pageVisible || this._routeConversationOpened) return
+					.then(async () => {
+						// 列表加载失败时不能把“未加载到”当成“不存在”，尤其不能误删旧会话。
+						if (!this._conversationPageAlive || !this.pageVisible || this.loadError || this._routeConversationOpened) return
 						this.activeMainTab = 'recent'
 						this.activeMessageTab = 'all'
 
 						const targetId = this.routePersonAccId
 						const existing = this.conversations.find(conversation => conversation.type === 1
 							&& String(conversation.targetId || '').trim() === targetId)
-						// 列表没有该人才时仍创建临时 P2P 会话；GetSingleChat 会补齐职位和简历信息。
+						if (!existing && this.routeMessageExistedProvided && this.routeMessageExisted) {
+							// 列表中不存在且 messageExisted=true 表示外链带来的旧会话已过期：
+							// 删除业务会话及网易云本地会话后提示用户回到简历页重新发起。
+							const deleted = await this.deleteExpiredRouteConversation(targetId)
+							if (deleted) this._routeConversationOpened = true
+							return
+						}
+						// 列表没有该人才时创建临时 P2P 会话；普通入口仍由 GetSingleChat 补齐详情，
+						// messageExisted=false 则由 selectConversation 在同一请求生命周期内调用 Limits。
 						const conversation = existing || this.createRouteConversation(targetId)
 						if (!conversation) return
-						return this.selectConversation(conversation).then(() => {
+						return this.selectConversation(conversation, {
+							// 只有“列表没有该人才 + messageExisted=false”才走外链的 Limits 分支；
+							// 已存在会话或未传 messageExisted 仍保持原有 GetSingleChat 逻辑。
+							useRouteAccess: !existing && this.routeMessageExistedProvided && !this.routeMessageExisted
+						}).then(() => {
 							if (this.chatDetail && this.chatDetail.conversationId === conversation.id) {
 								this._routeConversationOpened = true
 								// 云信创建事件到达前先把新会话加入列表，保证选中状态可见。
@@ -452,6 +482,90 @@
 						}
 					})
 				return this._routeConversationPromise
+			},
+			async deleteExpiredRouteConversation(personAccId) {
+				if (!this._conversationPageAlive || !this.pageVisible || !isNimLoggedIn()) return false
+				let businessDeleted = false
+				try {
+					const nim = getNimInstance()
+					const loginService = nim && nim.V2NIMLoginService
+					const enterpriseAccId = loginService && typeof loginService.getLoginUser === 'function'
+						? String(loginService.getLoginUser() || '').trim() : ''
+					if (!enterpriseAccId || !personAccId) throw new Error('未获取到会话账号信息')
+					// 删除必须使用 SDK 生成的完整 P2P ID，不能使用临时展示会话的账号兜底 ID。
+					const util = nim.V2NIMConversationIdUtil
+					const conversationId = util && typeof util.p2pConversationId === 'function'
+						? String(util.p2pConversationId(personAccId) || '').trim() : ''
+					if (!conversationId) throw new Error('未获取到网易云会话 ID，请重试')
+					const conversationService = nim.V2NIMLocalConversationService
+					if (!conversationService || typeof conversationService.deleteConversation !== 'function') {
+						throw new Error('当前聊天服务不支持删除会话')
+					}
+					if (typeof conversationService.getStickTopConversationList !== 'function') {
+						throw new Error('当前聊天服务不支持查询置顶会话')
+					}
+					// 主列表没有该人才时仍查询云信置顶列表；查询失败则停止，避免遗留置顶记录。
+					const pinnedList = await conversationService.getStickTopConversationList()
+					if (!Array.isArray(pinnedList)) throw new Error('查询会话置顶状态失败，请重试')
+					const isPinned = pinnedList.some(item => {
+						const id = item && (item.conversationId || item.id)
+						return String(id || '').trim() === conversationId
+					})
+					if (isPinned && typeof conversationService.stickTopConversation !== 'function') {
+						throw new Error('当前聊天服务不支持取消置顶')
+					}
+					// 等待期间若页面已离开或账号改变，不再发起业务删除。
+					if (!this._conversationPageAlive || !this.pageVisible || !isNimLoggedIn()
+						|| String(loginService.getLoginUser() || '').trim() !== enterpriseAccId) return false
+					// 文档 2268：企业端用登录企业账号和 URL 人才账号删除业务会话，不传职位/简历 ID。
+					const response = await requestApi({
+						Name: CHAT_DELETE_API,
+						Content: { EnterpriseAccId: enterpriseAccId, PersonAccId: personAccId }
+					})
+					if (!response || Number(response.Code) !== 0) {
+						const code = response && response.Code !== undefined ? response.Code : 'unknown'
+						throw new Error(`删除过期会话失败，业务错误码：${code}`)
+					}
+					let data = response.Data
+					if (data === undefined || data === null || data === '') data = {}
+					if (typeof data === 'string') data = data.trim() ? JSON.parse(data) : {}
+					if (!data || typeof data !== 'object' || Array.isArray(data)) {
+						throw new Error('删除会话接口返回的数据格式不正确')
+					}
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error(`删除过期会话失败，数据错误码：${data.Code}`)
+					}
+					businessDeleted = true
+
+					// 业务成功后即使页面隐藏，也完成云信同步；账号切换时不操作新账号的 SDK 会话。
+					if (!isNimLoggedIn() || String(loginService.getLoginUser() || '').trim() !== enterpriseAccId) {
+						throw new Error('聊天账号已切换')
+					}
+					// 网易云置顶会话先取消置顶，再删除会话；true 表示同时清除本地消息缓存。
+					if (isPinned) await conversationService.stickTopConversation(conversationId, false)
+					await conversationService.deleteConversation(conversationId, true)
+					if (this._conversationPageAlive) {
+						this.handleConversationDeleted([conversationId])
+						// 隐藏期间完成清理时，回到页面再展示提示，不重复删除或打开过期聊天。
+						this._expiredRouteNoticePending = true
+						this.showExpiredRouteNotice()
+					}
+					return true
+				} catch (error) {
+					if (this._conversationPageAlive && this.pageVisible) {
+						uni.showToast({
+							title: businessDeleted ? '业务会话已删除，网易云会话同步失败，请重试'
+								: (error && error.message ? error.message : '删除过期会话失败'),
+							icon: 'none'
+						})
+					}
+					return false
+				}
+			},
+			showExpiredRouteNotice() {
+				if (!this._conversationPageAlive || !this.pageVisible || !this._expiredRouteNoticePending) return
+				this._expiredRouteNoticePending = false
+				uni.showModal({ title: '提示', content: EXPIRED_ROUTE_MESSAGE, showCancel: false, confirmText: '确定' })
 			},
 			createRouteConversation(personAccId) {
 				if (!personAccId) return null
@@ -530,6 +644,14 @@
 				this._openConversationRequestId += 1
 				this.openingConversationId = ''
 			},
+			handleInitialAccessConsumed(conversationId) {
+				// 首次 Limits 响应只允许一个面板实例消费；切换页签重新挂载时必须重新请求，
+				// 避免把旧职位/简历的权限结果误用到同一人才的新会话状态。
+				if (this.chatDetail && this.chatDetail.conversationId === conversationId
+					&& this.chatDetail.initialAccess) {
+					this.$set(this.chatDetail, 'initialAccess', null)
+				}
+			},
 			cancelContinueHistory() {
 				this._continueHistoryRequestId = (this._continueHistoryRequestId || 0) + 1
 				this.isContinuingHistoryChat = false
@@ -598,7 +720,7 @@
 				this.cancelContinueHistory()
 				this.activeMainTab = key
 			},
-			async selectConversation(conversation) {
+			async selectConversation(conversation, options = {}) {
 				if (!conversation || !conversation.id) return
 				const isHistory = this.activeMainTab === 'history'
 				if (isHistory) this.cancelContinueHistory()
@@ -626,21 +748,43 @@
 					&& requestId === this._openConversationRequestId
 				this.openingConversationId = conversation.id
 				try {
-					const response = await requestApi({
+					const useRouteAccess = Boolean(options && options.useRouteAccess)
+					if (useRouteAccess && (!this.routeJobId || !this.routeResumeId)) {
+						throw new Error('缺少 messageExisted=false 所需的 jobId 或 resumeId')
+					}
+					// 外链标记 messageExisted=false 且列表没有该人才时，直接请求 Limits；请求受当前
+					// 会话序号保护，页面隐藏/切换后响应不会覆盖新的选择。
+					const response = await requestApi(useRouteAccess ? {
+						Name: 'Chat.MyChat.Limits',
+						Content: { JobId: this.routeJobId, ResumeId: this.routeResumeId }
+					} : {
 						Name: 'Chat.Chat.GetSingleChat',
 						Content: { PersonAccId: personAccId, EnterpriseAccId: enterpriseAccId }
 					})
 					if (!isCurrent()) return
-					if (!response || Number(response.Code) !== 0) throw new Error('获取会话信息失败')
-					const data = typeof response.Data === 'string' ? JSON.parse(response.Data) : response.Data
-					if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('会话信息格式不正确')
-					if (data.Code !== undefined && Number(data.Code) !== 0) throw new Error('获取会话信息失败')
-					const jobId = String(data.JobId === undefined || data.JobId === null ? '' : data.JobId).trim()
-					const resumeId = String(data.ResumeId === undefined || data.ResumeId === null ? '' : data.ResumeId).trim()
+					if (!response || typeof response !== 'object') throw new Error('获取会话信息失败')
+					// Limits 的完整响应交给聊天面板处理 SuccessStep、账号校验、职位不一致、
+					// 默认招呼语等已有分支；这里仅尽量解析资料字段，解析失败仍由面板提示。
+					let data = {}
+					try {
+						const parsed = typeof response.Data === 'string' ? JSON.parse(response.Data) : response.Data
+						if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) data = parsed
+					} catch (error) {
+						// 保留原始 Limits 响应，让面板的统一 responseData 校验展示错误。
+					}
+					if (!useRouteAccess && Number(response.Code) !== 0) throw new Error('获取会话信息失败')
+					if (!useRouteAccess && data.Code !== undefined && Number(data.Code) !== 0) {
+						throw new Error('获取会话信息失败')
+					}
+					const jobId = String(useRouteAccess
+						? this.routeJobId : (data.JobId === undefined || data.JobId === null ? '' : data.JobId)).trim()
+					const resumeId = String(useRouteAccess
+						? this.routeResumeId : (data.ResumeId === undefined || data.ResumeId === null ? '' : data.ResumeId)).trim()
 					if (!jobId || !resumeId) throw new Error('会话信息缺少职位或简历')
 					// 账号若有返回则必须与所点击的会话一致，防止业务资料与云信消息串到另一位人才。
-					if ((data.PersonAccId && String(data.PersonAccId).trim() !== personAccId)
-						|| (data.EnterpriseAccId && String(data.EnterpriseAccId).trim() !== enterpriseAccId)) {
+					const accountMismatch = (data.PersonAccId && String(data.PersonAccId).trim() !== personAccId)
+						|| (data.EnterpriseAccId && String(data.EnterpriseAccId).trim() !== enterpriseAccId)
+					if (!useRouteAccess && accountMismatch) {
 						throw new Error('会话账号与所选人才不一致')
 					}
 					// 与手机端一致解析业务置顶状态，只有接口未返回 IsTop 时才回退到云信缓存。
@@ -652,7 +796,10 @@
 						jobSalary: data.Salary === undefined || data.Salary === null ? '' : String(data.Salary),
 						isPinned: isTop === undefined ? Boolean(conversation.stickTop)
 							: isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true',
-						chatByQRcode: data.ChatByQRcode || ''
+						chatByQRcode: data.ChatByQRcode || '',
+						// 仅外链“新发起且列表缺失”场景复用首次 Limits 响应，
+						// pc-chat-panel 会继续执行既有的权限、SuccessStep 和职位校验逻辑。
+						initialAccess: useRouteAccess ? response : null
 					}
 					// 两个分类各自保存选择，避免同一会话 ID 让历史详情误用实时聊天状态。
 					if (isHistory) this.historyChatDetail = detail

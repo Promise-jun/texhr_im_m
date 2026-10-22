@@ -336,6 +336,8 @@
 			enterpriseAccId: { type: String, required: true },
 			detail: { type: Object, required: true },
 			drafts: { type: Object, required: true },
+			// 外链在会话列表缺失时由父页首次请求的 Limits 响应；消费后由父页清空，重试会重新请求。
+			initialAccess: { type: Object, default: null },
 			visible: { type: Boolean, default: true },
 			opening: { type: Boolean, default: false },
 			// 历史会话继续沟通已在进入实时面板前发送指定消息，避免再次发送默认招呼语。
@@ -490,10 +492,21 @@
 				this.isCheckingAccess = true
 				this.accessError = ''
 				try {
-					// 使用 GetSingleChat 返回的职位、简历 ID 校验当前沟通权限。
-					const response = await requestApi({
-						Name: 'Chat.MyChat.Limits', Content: { JobId: this.jobId, ResumeId: this.resumeId }
-					})
+					let response
+					// 外链场景的父页已经完成一次 Limits 请求，面板只消费这一份响应，避免首屏重复请求。
+					// 初次消费后清空父页缓存；同一实例点击重试时会重新请求最新权限状态。
+					const canUseInitialAccess = this._initialAccessPending === undefined
+						? Boolean(this.initialAccess) : this._initialAccessPending
+					if (canUseInitialAccess && this.initialAccess) {
+						response = this.initialAccess
+						this._initialAccessPending = false
+						if (typeof this.$emit === 'function') this.$emit('access-consumed', this.conversationId)
+					} else {
+						// 普通点击会话及权限失败后的重试，仍按当前职位/简历请求 Limits。
+						response = await requestApi({
+							Name: 'Chat.MyChat.Limits', Content: { JobId: this.jobId, ResumeId: this.resumeId }
+						})
+					}
 					const data = responseData(response)
 					if (!this._alive) return
 					// 与手机端一致，以 Limits 的 IsTop 为准，兼容 Data、根节点及布尔/数字/字符串返回值。

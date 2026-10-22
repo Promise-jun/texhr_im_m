@@ -46,6 +46,7 @@ function environment(options = {}) {
   const def = context.module.exports
   const panel = { conversation: { name: '模拟人才', stickTop: false }, detail: { conversationId: 'a' },
     jobId: 'job', resumeId: 'resume', enterpriseAccId: 'enterprise', personAccId: 'a',
+    initialAccess: options.initialAccess || null,
     drafts: { a: '尚未发送的草稿', b: '另一个会话的草稿' }, visible: true, opening: false,
     _alive: true, $set: (obj, key, value) => { obj[key] = value },
     $nextTick: fn => Promise.resolve().then(fn), $emit: (event, payload) => {
@@ -77,6 +78,16 @@ function greetingEnvironment(limitsResponse = { Code: 0, Data: { JobId: 'job', M
 }
 
 async function verify() {
+  const cached = environment({ initialAccess: { Code: 0, Data: { JobId: 'job', ResumeId: 'resume' } } })
+  await cached.panel.loadChatAccess()
+  assert.equal(cached.calls.filter(item => item.Name === 'Chat.MyChat.Limits').length, 0)
+  assert.equal(cached.changes.includes('access-consumed'), true)
+  await cached.panel.loadChatAccess()
+  assert.equal(cached.calls.filter(item => item.Name === 'Chat.MyChat.Limits').length, 1)
+  assert.deepEqual(cached.calls.find(item => item.Name === 'Chat.MyChat.Limits').Content,
+    { JobId: 'job', ResumeId: 'resume' })
+  console.log('PASS: an external Limits response is consumed once; retries request the current job/resume again')
+
   const env = environment(), { panel } = env
   const rows = [
     { Id: 'normal', Msg: '  您好，请介绍一下工作经历。  ', IsTop: false },
