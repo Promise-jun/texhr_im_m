@@ -11,7 +11,7 @@
 		</view>
 
 		<scroll-view class="message-scroll" scroll-y :scroll-into-view="scrollTarget"
-			:upper-threshold="60" @scrolltoupper="loadEarlierMessages(false)">
+			:upper-threshold="60" @scroll="closeMessageContextMenu" @scrolltoupper="loadEarlierMessages(false)">
 			<view class="message-content">
 				<view v-if="messages.length" class="history-state" @click="loadEarlierMessages(false)">
 					{{ isLoadingHistory ? '正在加载聊天记录...' : historyExhausted ? '没有更多消息了' : '加载更多消息' }}
@@ -28,7 +28,8 @@
 					<view v-if="message.type === 'time' || message.type === 'system'" :key="message.id"
 						class="time-divider">{{ message.content }}</view>
 					<view v-else :id="message.anchor" :key="message.id" class="message-row"
-						:class="[message.direction, { 'message-row--person-card': message.type === 'person-card' }]">
+						:class="[message.direction, { 'message-row--person-card': message.type === 'person-card' }]"
+						@contextmenu.prevent.stop="openMessageContextMenu($event, message)">
 						<!-- type=4 的 Person 卡片为完整信息块，不展示聊天头像和气泡。 -->
 						<view v-if="message.type === 'person-card'" class="person-message-card"
 							@click.stop="emitAction('resume', '查看简历')">
@@ -181,6 +182,14 @@
 				</scroll-view>
 			</view>
 		</view>
+
+		<!-- PC 端仅为自己发送、尚未撤回的消息显示右键菜单；坐标由事件位置计算并限制在视口内。 -->
+		<view v-if="messageContextMenu.visible" class="message-context-menu" role="menu"
+			:style="{ left: messageContextMenu.left + 'px', top: messageContextMenu.top + 'px' }"
+			@click.stop @contextmenu.stop.prevent>
+			<button class="message-context-menu-item" role="menuitem" :disabled="messageActionId !== ''"
+				@click="confirmRevokeMessage">{{ messageActionId ? '撤回中...' : '撤回' }}</button>
+		</view>
 	</view>
 </template>
 
@@ -204,9 +213,12 @@
 	const BLOCKED_USER_SEND_WARNING = '对方在您的黑名单中，无法回复您的消息'
 	const TALENT_BLOCKED_SEND_CODE = '102426'
 	const TALENT_BLOCKED_SEND_MESSAGE = '该人才已屏蔽您的消息，暂不能发送消息'
+	const MESSAGE_REVOKE_EXPIRED_CODE = '107314'
+	const MESSAGE_REVOKE_EXPIRED_MESSAGE = '发送时间超过2分钟的消息，不能被撤回'
+	const REVOKED_MESSAGE_TEXT = '你撤回了一条消息'
 	const MESSAGE_LABELS = { 2: '[语音]', 3: '[视频]', 4: '[位置]', 6: '[文件]', 100: '[自定义消息]' }
 
-	function getSendFailureMessage(error) {
+	function getErrorCode(error) {
 		// 沿用手机端错误码取值方式，兼容 SDK 数字 code 和接口包装后的字符串 code。
 		const codes = error && typeof error === 'object' ? [
 			error.code, error.Code, error.errCode, error.errorCode,
@@ -214,8 +226,19 @@
 			error.detail && error.detail.code, error.detail && error.detail.Code
 		] : []
 		const code = codes.find(value => value !== undefined && value !== null && value !== '')
-		if (String(code) === TALENT_BLOCKED_SEND_CODE) return TALENT_BLOCKED_SEND_MESSAGE
+		return code === undefined ? '' : String(code)
+	}
+
+	function getSendFailureMessage(error) {
+		if (getErrorCode(error) === TALENT_BLOCKED_SEND_CODE) return TALENT_BLOCKED_SEND_MESSAGE
 		return error && error.message ? error.message : '消息发送失败，请重试'
+	}
+
+	function isMessageRevokeExpiredError(error) {
+		if (getErrorCode(error) === MESSAGE_REVOKE_EXPIRED_CODE) return true
+		const errorMessage = error && (error.message || error.errMsg || error.desc) ?
+			String(error.message || error.errMsg || error.desc) : ''
+		return errorMessage.includes(MESSAGE_REVOKE_EXPIRED_CODE)
 	}
 
 	function messageId(message) {
@@ -361,6 +384,8 @@
 				isOtherBlocked: false, blockStatusLoaded: false, blockStatusError: '',
 				isCheckingBlockStatus: false, isUpdatingBlockStatus: false,
 				isLoadingCommonPhrases: false, commonPhrasesError: '', sendingPhraseKey: '',
+				messageActionId: '',
+				messageContextMenu: { visible: false, left: 0, top: 0, messageId: '' },
 				// 与手机端共用网易云信官方表情数据，发送时写入 [表情名] key。
 				emojis: NIM_EMOJIS
 			}
@@ -403,7 +428,8 @@
 						parseJobMessageData(customPayload.data) : null
 					const person = customType === 4 ? parsePersonMessageData(customPayload.data) : null
 					const jobChangeContent = customType === 5 ? formatJobChangeMessage(customData) : ''
-					const content = jobChangeContent || (revoked ? '消息已撤回' : type === 0 || type === 10 ? message.text || '[消息]'
+					const content = jobChangeContent || (revoked ? (message.isSelf || message.senderId === this.enterpriseAccId
+						? REVOKED_MESSAGE_TEXT : '对方撤回了一条消息') : type === 0 || type === 10 ? message.text || '[消息]'
 						: type === 6 && attachment.name ? `[文件] ${attachment.name}` : MESSAGE_LABELS[type] || '[暂不支持的消息]')
 					rows.push({
 						id, anchor: this.messageAnchor(id),
@@ -421,6 +447,10 @@
 			}
 		},
 		watch: {
+			'detail.isPinned'(value) {
+				// 复用父页 pin-changed 的业务状态，同步列表菜单操作到右下角按钮；不监听云信旧缓存 stickTop。
+				if (this._alive && value !== undefined) this.isPinned = Boolean(value)
+			},
 			visible(value) {
 				if (!this._alive) return
 				if (!value) this.releaseCurrentConversation()
@@ -852,6 +882,100 @@
 				this.emojiVisible = false
 				this.phrasesVisible = false
 				this.moreMenuVisible = false
+				this.closeMessageContextMenu()
+			},
+			findRawMessage(message) {
+				const id = message && typeof message === 'object' ? message.id : message
+				if (id === undefined || id === null) return null
+				const targetId = String(id)
+				return this.messages.find(item => messageId(item) === targetId) || null
+			},
+			openMessageContextMenu(event, message) {
+				// 只拦截自己的有效消息，收到的消息继续使用浏览器原生右键行为。
+				const rawMessage = this.findRawMessage(message)
+				const isSelf = Boolean(rawMessage && (rawMessage.isSelf || rawMessage.senderId === this.enterpriseAccId))
+				if (!this._alive || !this.visible || this.opening || !this.accessReady || this.messageActionId ||
+					!isSelf || rawMessage.isRevoked) return
+				if (event && typeof event.preventDefault === 'function') event.preventDefault()
+				if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+				this.emojiVisible = false
+				this.phrasesVisible = false
+				this.moreMenuVisible = false
+
+				// 固定定位避免被消息滚动区裁剪，同时为视口边缘预留 8px 间距。
+				const detail = event && event.detail ? event.detail : {}
+				const x = Number(event && event.clientX !== undefined ? event.clientX : detail.x) || 0
+				const y = Number(event && event.clientY !== undefined ? event.clientY : detail.y) || 0
+				const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : x + 104
+				const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : y + 48
+				this.messageContextMenu = {
+					visible: true,
+					left: Math.max(8, Math.min(x, viewportWidth - 104)),
+					top: Math.max(8, Math.min(y, viewportHeight - 48)),
+					messageId: messageId(rawMessage)
+				}
+			},
+			closeMessageContextMenu() {
+				if (!this.messageContextMenu.visible) return
+				this.messageContextMenu = { visible: false, left: 0, top: 0, messageId: '' }
+			},
+			confirmRevokeMessage() {
+				const rawMessage = this.findRawMessage(this.messageContextMenu.messageId)
+				this.closeMessageContextMenu()
+				if (!rawMessage || this.messageActionId) return
+				// 与手机端保持一致，真正调用云信撤回前要求用户再次确认。
+				uni.showModal({
+					title: '撤回消息',
+					content: '确定要撤回这条消息吗？',
+					confirmText: '撤回',
+					confirmColor: '#e64340',
+					success: result => {
+						if (result && result.confirm) this.revokeMessage(rawMessage)
+					}
+				})
+			},
+			markMessageAsRevoked(rawMessage) {
+				const targetId = messageId(rawMessage)
+				const originalText = rawMessage.text !== undefined ? String(rawMessage.text) : ''
+				this.messages = this.messages.map(item => messageId(item) === targetId ? {
+					...item,
+					isRevoked: true,
+					revokedText: originalText
+				} : item)
+			},
+			async revokeMessage(rawMessage) {
+				if (!rawMessage || this.messageActionId || !this._alive || !this.visible || this.opening ||
+					rawMessage.conversationId !== this.conversationId) return
+				const id = messageId(rawMessage)
+				const conversationId = this.conversationId
+				const isSelf = rawMessage.isSelf || rawMessage.senderId === this.enterpriseAccId
+				if (!isSelf || rawMessage.isRevoked) return
+				const messageService = getNimInstance().V2NIMMessageService
+				if (!messageService || typeof messageService.revokeMessage !== 'function') {
+					uni.showToast({ title: '当前聊天服务不支持撤回消息', icon: 'none' })
+					return
+				}
+
+				this.messageActionId = id
+				try {
+					// 必须传 SDK 原始消息对象；展示层消息缺少撤回接口需要的 messageRefer 等字段。
+					await messageService.revokeMessage(rawMessage)
+					if (!this._alive || this.conversationId !== conversationId) return
+					this.markMessageAsRevoked(rawMessage)
+					this.$emit('changed')
+					if (this.visible && !this.opening) uni.showToast({ title: '消息已撤回', icon: 'none' })
+				} catch (error) {
+					if (this._alive && this.conversationId === conversationId && this.visible && !this.opening) {
+						uni.showToast({
+							title: isMessageRevokeExpiredError(error) ? MESSAGE_REVOKE_EXPIRED_MESSAGE :
+								error && error.message ? error.message : '撤回消息失败',
+							icon: 'none'
+						})
+					}
+					console.error('[PC Chat] 撤回消息失败', error)
+				} finally {
+					if (this._alive && this.messageActionId === id) this.messageActionId = ''
+				}
 			},
 			openMoreMenu() {
 				if (!this._alive || !this.visible || this.opening) return
@@ -1379,6 +1503,14 @@
 	@media (prefers-reduced-motion: reduce) { .audio-spinner, .audio-waveform--playing .audio-wave-bar { animation: none; } }
 	.message-image { display: block; width: 230px; max-width: 100%; border-radius: 3px; }
 	.message-bottom { height: 12px; }
+	.message-context-menu { position: fixed; z-index: 30; box-sizing: border-box; width: 96px; padding: 4px 0;
+		border: 1px solid #e5e8eb; border-radius: 4px; background: #fff; box-shadow: 0 3px 12px rgba(0, 0, 0, .12); }
+	.message-context-menu-item { display: block; box-sizing: border-box; width: 100%; height: 38px; margin: 0; padding: 0 16px;
+		border: 0; border-radius: 0; font-size: 13px; line-height: 38px; text-align: left; color: #65717b;
+		background: transparent; cursor: pointer; &::after { border: 0; }
+		&:hover { color: #f37324; background: #fff6f0; }
+		&[disabled] { color: #a4abb4; background: transparent; cursor: default; }
+		&:focus-visible { outline: 2px solid #f37324; outline-offset: -2px; } }
 	.composer { position: relative; flex: 0 0 158px; box-sizing: border-box; border-top: 1px solid #eceff1; }
 	.composer-toolbar { display: flex; align-items: center; height: 42px; padding: 0 18px; gap: 16px; }
 	.composer-tool { display: inline-flex; align-items: center; flex-shrink: 0; color: #9aa3ab; font-size: 13px;

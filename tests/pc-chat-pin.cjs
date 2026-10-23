@@ -118,6 +118,65 @@ async function verify() {
   assert.equal(fallback.panelDef.watch['conversation.stickTop'], undefined)
   console.log('PASS: business pin state overrides stale SDK state; Data/root booleans, numbers and strings match mobile parsing')
 
+  // 模拟 Vue 将父页更新后的 props 传给当前面板，并触发业务置顶状态 watcher。
+  function syncPanelProps(env) {
+    const previous = env.panel.detail.isPinned
+    env.panel.detail = env.page.chatDetail
+    env.panel.conversation = env.page.activeConversation
+    if (env.panel.detail.isPinned !== previous) {
+      env.panelDef.watch['detail.isPinned'].call(env.panel, env.panel.detail.isPinned)
+    }
+  }
+  const list = environment({ isPinned: false })
+  list.panel.messages = [{ text: 'existing message' }]
+  const messages = list.panel.messages, drafts = list.panel.drafts
+  for (const expected of [true, false]) {
+    const saving = deferred(), syncing = deferred()
+    list.request(() => saving.promise)
+    list.stick(() => syncing.promise)
+    const operation = list.page.toggleConversationPin(list.page.conversations.find(item => item.id === 'a'))
+    assert.equal(list.panel.isPinned, !expected)
+    saving.resolve({ Code: 0 })
+    await new Promise(resolve => setImmediate(resolve))
+    syncPanelProps(list)
+    assert.equal(list.panel.isPinned, expected)
+    assert.equal(list.page.chatDetail.isPinned, expected)
+    assert.equal(list.calls[list.calls.length - 1].Content.IsTop, expected)
+    assert.equal(list.sticks[list.sticks.length - 1].value, expected)
+    assert.strictEqual(list.panel.messages, messages)
+    assert.strictEqual(list.panel.drafts, drafts)
+    syncing.resolve()
+    await operation
+  }
+  // 反向操作仍复用面板已有事件，同步回列表及父页业务快照。
+  list.request(async () => ({ Code: 0 }))
+  list.stick(async () => {})
+  await list.panel.togglePinned()
+  syncPanelProps(list)
+  assert.equal(list.page.conversations.find(item => item.id === 'a').stickTop, true)
+  assert.equal(list.panel.isPinned, true)
+  const partialList = environment({ isPinned: false })
+  partialList.stick(async () => { throw new Error('SDK failed') })
+  await partialList.page.toggleConversationPin(partialList.page.conversations.find(item => item.id === 'a'))
+  syncPanelProps(partialList)
+  assert.equal(partialList.panel.isPinned, true)
+  assert.equal(partialList.toasts[0], '状态已保存，会话列表同步失败')
+  const otherList = environment({ isPinned: false })
+  await otherList.page.toggleConversationPin(otherList.page.conversations.find(item => item.id === 'b'))
+  syncPanelProps(otherList)
+  assert.equal(otherList.panel.isPinned, false)
+  const failedList = environment({ isPinned: false })
+  failedList.request(async () => ({ Code: 4400002 }))
+  await failedList.page.toggleConversationPin(failedList.page.conversations.find(item => item.id === 'a'))
+  syncPanelProps(failedList)
+  assert.equal(failedList.panel.isPinned, false)
+  list.panelDef.watch['detail.isPinned'].call(list.panel, undefined)
+  assert.equal(list.panel.isPinned, true)
+  list.panel._alive = false
+  list.panelDef.watch['detail.isPinned'].call(list.panel, false)
+  assert.equal(list.panel.isPinned, true)
+  console.log('PASS: list pin/unpin updates the open composer before SDK completion, preserves messages/drafts, and isolates failures and other conversations')
+
   const env = environment(), saving = deferred(), syncing = deferred()
   env.request(() => saving.promise)
   env.stick(() => syncing.promise)

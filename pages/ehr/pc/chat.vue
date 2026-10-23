@@ -1,5 +1,5 @@
 <template>
-	<view class="pc-chat-page">
+	<view class="pc-chat-page" @click="closeConversationMenu()" @keydown.esc="closeConversationMenu()">
 		<view class="chat-shell">
 			<view class="top-bar">
 				<view class="main-tabs">
@@ -25,10 +25,12 @@
 						</view>
 					</view>
 
-					<view class="conversation-list" :class="{ 'conversation-list--full': activeMainTab === 'history' }">
+					<view class="conversation-list" :class="{ 'conversation-list--full': activeMainTab === 'history' }"
+						@scroll="closeConversationMenu()">
 						<view v-for="conversation in visibleConversations" :key="conversation.id"
 							class="conversation-item" :class="{ 'conversation-item--selected': visibleSelectedId === conversation.id,
-								'conversation-item--opening': openingConversationId === conversation.id }"
+								'conversation-item--opening': openingConversationId === conversation.id,
+								'conversation-item--menu-open': activeConversationMenuId === conversation.id }"
 							@click="selectConversation(conversation)">
 							<image :src="getConversationAvatar(conversation)" class="avatar" mode="aspectFill"
 								@error="handleAvatarError(conversation)"></image>
@@ -36,12 +38,30 @@
 								<text class="conversation-name">{{ conversation.name }}</text>
 								<text class="conversation-preview">{{ conversation.message }}</text>
 							</view>
-							<view class="conversation-meta">
-								<text class="conversation-time">{{ conversation.time }}</text>
+							<view class="conversation-meta" @mouseleave="closeConversationMenu(conversation)">
+								<!-- 悬停时间后原位显示三个点；菜单与时间同属一个容器，移入菜单不会提前关闭。 -->
+								<view class="conversation-meta-top" @mouseenter="openConversationMenu(conversation, $event)">
+									<text class="conversation-time">{{ conversation.time }}</text>
+									<view v-if="activeMainTab === 'recent' && conversation.type === 1"
+										class="conversation-menu-trigger" role="button" aria-label="会话操作"
+										@click.stop="openConversationMenu(conversation, $event)">
+										<text></text><text></text><text></text>
+									</view>
+								</view>
 								<text v-if="conversation.unreadCount > 0" class="unread-badge"
 									:class="{ 'unread-badge--dot': conversation.mute }">
 									{{ conversation.mute ? '' : conversation.unreadText }}
 								</text>
+								<!-- 复用现有会话置顶、删除处理；仅最近会话（非历史列表）提供操作入口。 -->
+								<view v-if="activeMainTab === 'recent' && activeConversationMenuId === conversation.id"
+									class="conversation-action-menu" :class="{ 'conversation-action-menu--above': conversationMenuAbove }" @click.stop>
+									<view class="conversation-action-item" :class="{ 'is-disabled': updatingPinConversationId || deletingConversationId }"
+										@click.stop="toggleConversationPin(conversation)">
+										{{ conversation.stickTop ? '取消置顶' : '置顶' }}
+									</view>
+									<view class="conversation-action-item" :class="{ 'is-disabled': updatingPinConversationId || deletingConversationId }"
+										@click.stop="confirmDeleteConversation(conversation)">删除</view>
+								</view>
 							</view>
 							<view v-if="conversation.stickTop" class="pinned-corner"></view>
 						</view>
@@ -143,6 +163,7 @@
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const CONTINUE_CHAT_TEXT = '好久没互动了，我对你简历很感兴趣，快来聊聊~'
 	const PC_JOB_LIST_API = 'Chat.Chat.GetJobList'
+	const CHAT_SAVE_API = 'Chat.Chat.Save'
 	const CHAT_DELETE_API = 'Chat.Chat.Delete'
 	const EXPIRED_ROUTE_MESSAGE = '该会话已经过期，请重新在简历页面发起会话!'
 
@@ -162,6 +183,10 @@
 				routeResumeId: '',
 				selectedId: '',
 				openingConversationId: '',
+				activeConversationMenuId: '',
+				conversationMenuAbove: false,
+				updatingPinConversationId: '',
+				deletingConversationId: '',
 				chatDetail: null,
 				historyChatDetail: null,
 				isContinuingHistoryChat: false,
@@ -269,12 +294,14 @@
 		},
 		onHide() {
 			this.pageVisible = false
+			this.closeConversationMenu()
 			if (this._routeConversationPromise) this._routeConversationRetryAfterHide = true
 			this.cancelOpeningConversation()
 			this.cancelContinueHistory()
 		},
 		onUnload() {
 			this._conversationPageAlive = false
+			this.closeConversationMenu()
 			this.pageVisible = false
 			this.reportModalVisible = false
 			this.reportModalUrl = ''
@@ -284,6 +311,120 @@
 			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
 		},
 		methods: {
+			openConversationMenu(conversation, event) {
+				if (this.activeMainTab !== 'recent' || !conversation || conversation.type !== 1
+					|| this.updatingPinConversationId || this.deletingConversationId) return
+				this.conversationMenuAbove = false
+				// 列表底部空间不足时向上展开，避免菜单被滚动容器裁切。
+				const target = event && event.currentTarget
+				const list = target && typeof target.closest === 'function' ? target.closest('.conversation-list') : null
+				if (list) this.conversationMenuAbove = target.getBoundingClientRect().bottom + 80 > list.getBoundingClientRect().bottom
+				this.activeConversationMenuId = conversation.id
+			},
+			closeConversationMenu(conversation) {
+				if (!conversation || this.activeConversationMenuId === conversation.id) this.activeConversationMenuId = ''
+			},
+			async toggleConversationPin(conversation) {
+				if (!this._conversationPageAlive || !this.pageVisible || this.activeMainTab !== 'recent'
+					|| !conversation || conversation.isHistory || conversation.type !== 1 || !conversation.id
+					|| this.updatingPinConversationId || this.deletingConversationId) return
+				if (!isNimLoggedIn()) {
+					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					return
+				}
+				const nim = getNimInstance()
+				const loginService = nim && nim.V2NIMLoginService
+				// 企业端账号方向与 selectConversation 一致，不能照搬个人端列表的账号顺序。
+				const enterpriseAccId = loginService && typeof loginService.getLoginUser === 'function'
+					? String(loginService.getLoginUser() || '').trim() : ''
+				const personAccId = String(conversation.targetId || '').trim()
+				if (!enterpriseAccId || !personAccId) {
+					uni.showToast({ title: '未获取到会话账号信息', icon: 'none' })
+					return
+				}
+				const conversationId = conversation.id
+				const isPinned = !conversation.stickTop
+				let saved = false
+				let toastTitle = ''
+				this.updatingPinConversationId = conversationId
+				this.closeConversationMenu()
+				try {
+					// 复用 pc-chat-panel 的保存规则：先写业务状态，成功后再同步云信置顶。
+					const response = await requestApi({ Name: CHAT_SAVE_API, Content: {
+						PersonAccId: personAccId, EnterpriseAccId: enterpriseAccId, IsTop: isPinned
+					} })
+					const responseCode = response && response.Code !== undefined ? Number(response.Code) : NaN
+					if (responseCode !== 0) {
+						if (responseCode === 4400002) throw new Error('置顶数量已达上限')
+						throw new Error(`更新置顶状态失败，业务错误码：${response && response.Code !== undefined ? response.Code : 'unknown'}`)
+					}
+					let data = response.Data
+					if (typeof data === 'string') {
+						try { data = data.trim() ? JSON.parse(data) : {} }
+						catch (error) { throw new Error('保存会话接口返回的数据格式不正确') }
+					}
+					data = data === undefined || data === null ? {} : data
+					if (typeof data !== 'object' || Array.isArray(data)) throw new Error('保存会话接口返回的数据格式不正确')
+					if (data.Code !== undefined && Number(data.Code) !== 0) {
+						if (Number(data.Code) === 4400002) throw new Error('置顶数量已达上限')
+						throw new Error(`更新置顶状态失败，数据错误码：${data.Code}`)
+					}
+					saved = true
+					if (!isNimLoggedIn() || String(loginService.getLoginUser() || '').trim() !== enterpriseAccId) {
+						throw new Error('聊天账号已切换')
+					}
+					// 直接复用面板 pin-changed 的页面处理，保留时间、未读数、草稿并同步排序。
+					this.handleConversationPinChanged({ conversationId, isPinned })
+					const conversationService = nim.V2NIMLocalConversationService
+					if (!conversationService || typeof conversationService.stickTopConversation !== 'function') {
+						throw new Error('当前网易云信 SDK 不支持会话置顶')
+					}
+					await conversationService.stickTopConversation(conversationId, isPinned)
+					toastTitle = isPinned ? '会话已置顶' : '已取消置顶'
+				} catch (error) {
+					toastTitle = saved ? '状态已保存，会话列表同步失败' : error && error.message ? error.message : '更新置顶状态失败'
+					console.error('[PC Chat] 列表更新会话置顶状态失败', error)
+				} finally {
+					this.updatingPinConversationId = ''
+				}
+				if (this._conversationPageAlive && this.pageVisible && toastTitle) uni.showToast({ title: toastTitle, icon: 'none' })
+			},
+			confirmDeleteConversation(conversation) {
+				if (!this._conversationPageAlive || !this.pageVisible || this.activeMainTab !== 'recent'
+					|| !conversation || conversation.isHistory || conversation.type !== 1 || !conversation.id
+					|| this.deletingConversationId || this.updatingPinConversationId) return
+				this.closeConversationMenu()
+				// 复用手机端列表的删除确认交互，确认后才调用业务和云信删除。
+				uni.showModal({
+					title: '提示', content: '确认删除该条会话所有聊天记录吗？',
+					confirmText: '确认删除', confirmColor: '#ff5a00',
+					success: result => { if (result.confirm) this.deleteConversation(conversation) }
+				})
+			},
+			async deleteConversation(conversation) {
+				if (!this._conversationPageAlive || !this.pageVisible || this.activeMainTab !== 'recent'
+					|| !conversation || conversation.isHistory || conversation.type !== 1 || !conversation.id
+					|| this.deletingConversationId || this.updatingPinConversationId) return
+				if (!isNimLoggedIn()) {
+					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					return
+				}
+				this.closeConversationMenu()
+				this.deletingConversationId = conversation.id
+				uni.showLoading({ title: '删除中', mask: true })
+				try {
+					// 复用当前页已有的企业端删除流程；列表删除额外清空云端历史，不弹过期提示。
+					const deleted = await this.deleteExpiredRouteConversation(String(conversation.targetId || '').trim(), {
+						conversationId: conversation.id, clearHistory: true, showExpiredNotice: false
+					})
+					if (deleted && this._conversationPageAlive && this.pageVisible) {
+						uni.showToast({ title: '会话已删除', icon: 'none' })
+					}
+				} finally {
+					uni.hideLoading()
+					this.deletingConversationId = ''
+				}
+			},
 			bindConversationEvents() {
 				// SDK 单例已把原生监听转成 uni 全局事件；页面只负责订阅和在卸载时解绑。
 				uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
@@ -349,6 +490,7 @@
 				this.rawConversations = this.rawConversations.filter(conversation => {
 					return !deletedIdSet.has(String(conversation.conversationId))
 				})
+				if (deletedIdSet.has(String(this.activeConversationMenuId))) this.closeConversationMenu()
 				if (deletedIdSet.has(String(this.selectedId))) {
 					this.selectedId = ''
 					this.chatDetail = null
@@ -483,9 +625,10 @@
 					})
 				return this._routeConversationPromise
 			},
-			async deleteExpiredRouteConversation(personAccId) {
+			async deleteExpiredRouteConversation(personAccId, options = {}) {
 				if (!this._conversationPageAlive || !this.pageVisible || !isNimLoggedIn()) return false
 				let businessDeleted = false
+				let historyCleared = false
 				try {
 					const nim = getNimInstance()
 					const loginService = nim && nim.V2NIMLoginService
@@ -497,9 +640,16 @@
 					const conversationId = util && typeof util.p2pConversationId === 'function'
 						? String(util.p2pConversationId(personAccId) || '').trim() : ''
 					if (!conversationId) throw new Error('未获取到网易云会话 ID，请重试')
+					if (options.conversationId && String(options.conversationId) !== conversationId) {
+						throw new Error('会话账号与所选人才不一致，请刷新后重试')
+					}
 					const conversationService = nim.V2NIMLocalConversationService
 					if (!conversationService || typeof conversationService.deleteConversation !== 'function') {
 						throw new Error('当前聊天服务不支持删除会话')
+					}
+					const messageService = nim.V2NIMMessageService
+					if (options.clearHistory && (!messageService || typeof messageService.clearHistoryMessage !== 'function')) {
+						throw new Error('当前聊天服务不支持清空历史消息')
 					}
 					if (typeof conversationService.getStickTopConversationList !== 'function') {
 						throw new Error('当前聊天服务不支持查询置顶会话')
@@ -542,19 +692,30 @@
 						throw new Error('聊天账号已切换')
 					}
 					// 网易云置顶会话先取消置顶，再删除会话；true 表示同时清除本地消息缓存。
-					if (isPinned) await conversationService.stickTopConversation(conversationId, false)
+					if (isPinned) {
+						await conversationService.stickTopConversation(conversationId, false)
+						this.handleConversationPinChanged({ conversationId, isPinned: false })
+					}
+					// 列表删除沿用 person/m/list.vue：清空历史消息后再移除本地会话。
+					if (options.clearHistory) {
+						await messageService.clearHistoryMessage({ conversationId })
+						historyCleared = true
+					}
 					await conversationService.deleteConversation(conversationId, true)
 					if (this._conversationPageAlive) {
 						this.handleConversationDeleted([conversationId])
 						// 隐藏期间完成清理时，回到页面再展示提示，不重复删除或打开过期聊天。
-						this._expiredRouteNoticePending = true
-						this.showExpiredRouteNotice()
+						if (options.showExpiredNotice !== false) {
+							this._expiredRouteNoticePending = true
+							this.showExpiredRouteNotice()
+						}
 					}
 					return true
 				} catch (error) {
 					if (this._conversationPageAlive && this.pageVisible) {
 						uni.showToast({
-							title: businessDeleted ? '业务会话已删除，网易云会话同步失败，请重试'
+							title: businessDeleted ? (options.clearHistory && !historyCleared
+								? '业务会话已删除，网易云历史消息清理失败' : '业务会话已删除，网易云会话同步失败，请重试')
 								: (error && error.message ? error.message : '删除过期会话失败'),
 							icon: 'none'
 						})
@@ -716,11 +877,13 @@
 			},
 			switchMainTab(key) {
 				if (key === this.activeMainTab) return
+				this.closeConversationMenu()
 				this.cancelOpeningConversation()
 				this.cancelContinueHistory()
 				this.activeMainTab = key
 			},
 			async selectConversation(conversation, options = {}) {
+				this.closeConversationMenu()
 				if (!conversation || !conversation.id) return
 				const isHistory = this.activeMainTab === 'history'
 				if (isHistory) this.cancelContinueHistory()
@@ -1192,6 +1355,10 @@
 			background: #ffefe4;
 			cursor: progress;
 		}
+
+		&.conversation-item--menu-open {
+			z-index: 2;
+		}
 	}
 
 	.avatar {
@@ -1232,6 +1399,7 @@
 	}
 
 	.conversation-meta {
+		position: relative;
 		display: flex;
 		flex: 0 0 80px;
 		align-items: flex-end;
@@ -1244,6 +1412,66 @@
 		font-size: 12px;
 		line-height: 18px;
 		color: #929ba2;
+	}
+
+	.conversation-meta-top {
+		position: relative;
+		width: 100%;
+		height: 18px;
+		text-align: right;
+	}
+
+	.conversation-menu-trigger {
+		position: absolute;
+		top: 0;
+		right: 0;
+		display: none;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 3px;
+		width: 100%;
+		height: 18px;
+		cursor: pointer;
+
+		text {
+			width: 3px;
+			height: 3px;
+			background: #929ba2;
+			border-radius: 50%;
+		}
+	}
+
+	.conversation-item--menu-open {
+		.conversation-time { visibility: hidden; }
+		.conversation-menu-trigger { display: flex; }
+	}
+
+	.conversation-action-menu {
+		position: absolute;
+		z-index: 3;
+		top: 34px;
+		right: -14px;
+		width: 100px;
+		padding: 4px 0;
+		background: #ffffff;
+		box-shadow: 0 3px 12px rgba(0, 0, 0, .1);
+
+		&.conversation-action-menu--above {
+			top: auto;
+			bottom: calc(100% - 16px);
+		}
+	}
+
+	.conversation-action-item {
+		height: 34px;
+		font-size: 14px;
+		line-height: 34px;
+		text-align: center;
+		color: #929ba2;
+		cursor: pointer;
+
+		&:hover { color: #f37324; background: #fff8f3; }
+		&.is-disabled { color: #c4c8cc; cursor: not-allowed; }
 	}
 
 	.unread-badge {
