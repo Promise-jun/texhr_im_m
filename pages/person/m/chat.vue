@@ -296,7 +296,7 @@
 		setActiveConversationId
 	} from '../../../services/nim'
 	import {
-		markNimConversationRead
+		markNimConversationRead, sendNimP2PReadReceipt
 	} from '../../../services/conversation'
 	import {
 		NIM_EMOJIS,
@@ -845,6 +845,18 @@
 			const systemInfo = uni.getSystemInfoSync()
 			this.statusBarHeight = systemInfo.statusBarHeight || 0
 			this._chatPageAlive = true
+			// #ifdef H5
+			if (typeof document !== 'undefined') {
+				this._chatVisibilityHandler = () => {
+					if (document.hidden) clearActiveConversationId(this.conversationId)
+					else if (this._chatPageVisible && this.conversationId) {
+						setActiveConversationId(this.conversationId)
+						this.markVisibleMessagesRead()
+					}
+				}
+				document.addEventListener('visibilitychange', this._chatVisibilityHandler)
+			}
+			// #endif
 			this.bindNimLoginEvents()
 			this.loadCommonPhrases()
 			this.loadSendResumeStatus()
@@ -852,6 +864,10 @@
 		},
 		onUnload() {
 			this._chatPageAlive = false
+			this._chatPageVisible = false
+			// #ifdef H5
+			if (typeof document !== 'undefined' && this._chatVisibilityHandler) document.removeEventListener('visibilitychange', this._chatVisibilityHandler)
+			// #endif
 			this._pendingChatGreeting = null
 			// 离开聊天页后恢复消息列表页的其它会话红点判断。
 			clearActiveConversationId(this.conversationId)
@@ -861,11 +877,32 @@
 			this.unbindMessageEvents()
 		},
 		onHide() {
+			this._chatPageVisible = false
+			clearActiveConversationId(this.conversationId)
 			// App 进入后台时不能继续占用麦克风或播放语音。
 			if (this.isRecording) this.abortVoiceRecording()
 			this.destroyAudioPlayer()
 		},
+		onShow() {
+			this._chatPageVisible = true
+			if (this.conversationId && (typeof document === 'undefined' || !document.hidden)) {
+				setActiveConversationId(this.conversationId)
+				this.markVisibleMessagesRead()
+			}
+		},
 		methods: {
+			markVisibleMessagesRead() {
+				if (!this._chatPageAlive || !this._chatPageVisible || !this.conversationId) return
+				// #ifdef H5
+				if (typeof document !== 'undefined' && document.hidden) return
+				// #endif
+				// 本地未读数与发给对方的单聊回执各自独立，失败互不影响。
+				markNimConversationRead(this.conversationId).catch(error => console.warn('[Chat] 清除会话未读数失败', error))
+				const conversationId = this.conversationId
+				sendNimP2PReadReceipt(conversationId, this.messages, () => this._chatPageAlive && this._chatPageVisible &&
+					this.conversationId === conversationId && (typeof document === 'undefined' || !document.hidden))
+					.catch(error => console.warn('[Chat] 发送已读回执失败', error))
+			},
 			bindNimLoginEvents() {
 				// App.vue 中的云信登录是异步的，页面需要在登录完成后继续初始化会话。
 				uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleNimLoginStatus)
@@ -1213,16 +1250,14 @@
 					this.conversationId = nim.V2NIMConversationIdUtil.p2pConversationId(this
 						.enterpriseAccId)
 					// 标记当前前台会话：列表页收到消息事件时不为该会话重复显示红点。
-					setActiveConversationId(this.conversationId)
+					if (this._chatPageVisible && (typeof document === 'undefined' || !document.hidden)) setActiveConversationId(this.conversationId)
 					// 双方用户资料与历史消息并行获取，头像返回后 Vue 会自动刷新消息头像。
 					this.loadSelfUserProfile()
 					this.loadOtherUserProfile()
 					this.bindMessageEvents()
 					await this.loadEarlierMessages(true)
 					// 清除未读失败不影响历史消息展示，只记录日志供后续排查。
-					await markNimConversationRead(this.conversationId).catch(error => {
-						console.warn('[Chat] 清除会话未读数失败', error)
-					})
+					this.markVisibleMessagesRead()
 				})().catch(error => {
 					if (!this._chatPageAlive) return
 					this.historyLoadError = error && error.message ? error.message : '历史消息加载失败'
@@ -1358,10 +1393,8 @@
 
 				const afterMerge = () => {
 					if (!this._chatPageAlive) return
-					markNimConversationRead(this.conversationId).catch(error => {
-						console.warn('[Chat] 清除会话未读数失败', error)
-					})
-					this.$nextTick(() => this.scrollToBottom(true))
+					this.markVisibleMessagesRead()
+					if (this._chatPageVisible) this.$nextTick(() => this.scrollToBottom(true))
 				}
 				const mergeResult = this.mergeMessages(currentMessages)
 				return mergeResult && typeof mergeResult.then === 'function' ? mergeResult.then(afterMerge) : afterMerge()

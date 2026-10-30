@@ -43,6 +43,7 @@
 						<text class="time">{{ conversation.time }}</text>
 					</view>
 					<view class="message-row">
+						<text v-if="conversation.readState" class="read-state">[{{ conversation.readState }}]</text>
 						<text class="message">{{ conversation.message }}</text>
 					</view>
 				</view>
@@ -74,7 +75,6 @@
 	import {
 		getAllHistoryConversations,
 		getAllNimConversations,
-		markNimConversationRead,
 		normalizeAndSortConversations
 	} from '../../../services/conversation'
 	import {
@@ -453,6 +453,7 @@
 				uni.$on(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
 				uni.$on(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
 				uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.handleMessageReceived)
+				uni.$on(NIM_EVENT.P2P_READ_RECEIPTS, this.scheduleConversationReload)
 			},
 			unbindConversationEvents() {
 				uni.$off(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
@@ -463,6 +464,7 @@
 				uni.$off(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
 				uni.$off(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
 				uni.$off(NIM_EVENT.MESSAGE_RECEIVED, this.handleMessageReceived)
+				uni.$off(NIM_EVENT.P2P_READ_RECEIPTS, this.scheduleConversationReload)
 			},
 			handleLoginStatus(status) {
 				if (status !== 1) return
@@ -715,11 +717,6 @@
 						url,
 						success: () => {
 							this.clearNewMessageIndicator(conversation.id)
-							// 用户已进入会话，清除未读数；SDK 变更事件会同步刷新列表红点。
-							if (conversation.isHistory) return
-							markNimConversationRead(conversation.id).catch(error => {
-								console.warn('[NIM] 标记会话已读失败', error)
-							})
 						},
 						fail: error => {
 							console.error('[NIM] 打开聊天页面失败', error)
@@ -988,8 +985,17 @@
 
 					.message-row {
 						margin-top: 8rpx;
+						min-width: 0;
+
+						.read-state {
+							flex-shrink: 0;
+							font-size: 24rpx;
+							color: #1688ee;
+							margin-right: 4rpx;
+						}
 
 						.message {
+							min-width: 0;
 							overflow: hidden;
 							font-size: 24rpx;
 							text-overflow: ellipsis;

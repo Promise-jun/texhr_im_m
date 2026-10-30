@@ -146,7 +146,28 @@ export async function getAllNimConversations() {
 		offset = nextOffset
 	}
 
-	return enrichConversationsWithUserProfiles(Array.from(conversationMap.values()), nim)
+	const conversations = await enrichConversationsWithUserProfiles(Array.from(conversationMap.values()), nim)
+	const messageService = nim.V2NIMMessageService
+	const loginService = nim.V2NIMLoginService
+	const account = loginService && typeof loginService.getLoginUser === 'function' ? loginService.getLoginUser() : ''
+	if (!account || !messageService || typeof messageService.getP2PMessageReceipt !== 'function') return conversations
+	// 只查询自己发送的最新单聊消息；查询失败时状态保持未知，不误报未读。
+	return Promise.all(conversations.map(async conversation => {
+		const last = conversation.lastMessage
+		const refer = last && last.messageRefer
+		if (Number(conversation.type) !== 1 || !refer || refer.senderId !== account ||
+			Number(last.lastMessageState || 0) !== 0 || [2, 3].includes(Number(last.sendingState)) ||
+			!Number(refer.createTime)) return conversation
+		try {
+			const receipt = await messageService.getP2PMessageReceipt(conversation.conversationId)
+			return { ...conversation, peerReadTimestamp: Number(receipt && receipt.timestamp) || 0,
+				peerReadSender: refer.senderId, peerReadMessageId: refer.messageClientId,
+				peerReadMessageTime: Number(refer.createTime), peerReadKnown: true }
+		} catch (error) {
+			console.warn('[NIM] 查询单聊已读回执失败', error)
+			return conversation
+		}
+	}))
 }
 
 function parseResponseData(data) {
@@ -245,6 +266,44 @@ export async function markNimConversationRead(conversationId) {
 	await conversationService.clearUnreadCountByIds([conversationId])
 }
 
+const sentReadBoundaries = new Map()
+const readReceiptQueues = new Map()
+
+/** 向对方发送当前可见单聊中最新一条收到的消息作为已读边界。 */
+export async function sendNimP2PReadReceipt(conversationId, messages, isVisible = () => true) {
+	if (!conversationId || !isNimLoggedIn()) return
+	const nim = getNimInstance()
+	const service = nim.V2NIMMessageService
+	const login = nim.V2NIMLoginService
+	const account = login && typeof login.getLoginUser === 'function' ? login.getLoginUser() : ''
+	if (!account || !service || typeof service.sendP2PMessageReceipt !== 'function') return
+	const received = message => message && message.conversationId === conversationId && message.senderId &&
+		message.senderId !== account && !message.isSelf && !message.isRevoked && Number(message.createTime) > 0
+	let page = Array.isArray(messages) ? messages.slice() : []
+	let latest = page.filter(received).sort((a, b) => Number(b.createTime) - Number(a.createTime))[0]
+	// 最近一页可能全是自己发送的消息，向前查找真正的最后一条对方消息。
+	while (!latest && page.length && isVisible() && typeof service.getMessageList === 'function') {
+		const anchor = page.slice().sort((a, b) => Number(a.createTime) - Number(b.createTime))[0]
+		if (!anchor) break
+		const older = await service.getMessageList({ conversationId, limit: 50, anchorMessage: anchor, direction: 0 })
+		page = Array.isArray(older) ? older : []
+		if (page.some(message => message === anchor || (message.messageClientId && message.messageClientId === anchor.messageClientId))) break
+		latest = page.filter(received).sort((a, b) => Number(b.createTime) - Number(a.createTime))[0]
+	}
+	if (!latest || !isVisible()) return
+	const key = `${account}:${conversationId}`
+	const previous = readReceiptQueues.get(key) || Promise.resolve()
+	const current = previous.catch(() => {}).then(async () => {
+		// 串行发送并保留最高边界，防止历史查询晚于实时消息导致回执倒退。
+		if (!isVisible() || !isNimLoggedIn() || login.getLoginUser() !== account ||
+			Number(latest.createTime) <= (sentReadBoundaries.get(key) || 0)) return
+		await service.sendP2PMessageReceipt(latest)
+		sentReadBoundaries.set(key, Number(latest.createTime))
+	})
+	readReceiptQueues.set(key, current)
+	try { await current } finally { if (readReceiptQueues.get(key) === current) readReceiptQueues.delete(key) }
+}
+
 function padNumber(value) {
 	return value < 10 ? `0${value}` : String(value)
 }
@@ -313,6 +372,13 @@ export function normalizeConversation(conversation, now = Date.now()) {
 	const activityTime = getConversationActivityTime(conversation)
 	const unreadCount = Math.max(0, Number(conversation && conversation.unreadCount) || 0)
 	const targetId = getConversationTargetId(conversationId)
+	const last = conversation && conversation.lastMessage
+	const refer = last && last.messageRefer
+	const readState = conversation && conversation.peerReadKnown && refer && Number(refer.createTime) > 0 &&
+		conversation.peerReadSender === refer.senderId && conversation.peerReadMessageId === refer.messageClientId &&
+		conversation.peerReadMessageTime === Number(refer.createTime) &&
+		Number(last.lastMessageState || 0) === 0 && ![2, 3].includes(Number(last.sendingState))
+		? (Number(conversation.peerReadTimestamp) >= Number(refer.createTime) ? '已读' : '未读') : ''
 
 	return {
 		id: conversationId,
@@ -325,6 +391,7 @@ export function normalizeConversation(conversation, now = Date.now()) {
 			conversation && conversation.lastMessage,
 			Number(conversation && conversation.type)
 		),
+		readState,
 		time: formatConversationTime(activityTime, now),
 		activityTime,
 		stickTop: Boolean(conversation && conversation.stickTop),

@@ -25,6 +25,7 @@ function makeGlobals(state) {
   return {
     PcChatPanel: {}, PcChatHistoryPanel: {}, NIM_EVENT: {},
     isNimLoggedIn: () => true,
+    isNimConversationSynced: () => true,
     getNimLoginError: () => null,
     getNimInstance: () => ({
       V2NIMLoginService: { getLoginUser: () => 'enterprise-1' },

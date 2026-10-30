@@ -36,7 +36,7 @@
 								@error="handleAvatarError(conversation)"></image>
 							<view class="conversation-copy">
 								<text class="conversation-name">{{ conversation.name }}</text>
-								<text class="conversation-preview">{{ conversation.message }}</text>
+								<view class="conversation-preview"><text v-if="conversation.readState" class="conversation-read-state">[{{ conversation.readState }}] </text><text>{{ conversation.message }}</text></view>
 							</view>
 							<view class="conversation-meta" @mouseleave="closeConversationMenu(conversation)">
 								<!-- 悬停时间后原位显示三个点；菜单与时间同属一个容器，移入菜单不会提前关闭。 -->
@@ -146,6 +146,7 @@
 		NIM_EVENT,
 		getNimInstance,
 		getNimLoginError,
+		isNimConversationSynced,
 		isNimLoggedIn
 	} from '../../../services/nim'
 	import {
@@ -430,31 +431,33 @@
 				uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
 				uni.$on(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
 				uni.$on(NIM_EVENT.CONVERSATION_SYNC_STARTED, this.handleConversationSyncStarted)
-				uni.$on(NIM_EVENT.CONVERSATION_SYNC_FINISHED, this.scheduleConversationReload)
+				uni.$on(NIM_EVENT.CONVERSATION_SYNC_FINISHED, this.handleConversationSyncFinished)
 				uni.$on(NIM_EVENT.CONVERSATION_SYNC_FAILED, this.handleConversationLoadFailed)
 				uni.$on(NIM_EVENT.CONVERSATION_CREATED, this.handleConversationCreated)
 				uni.$on(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
 				uni.$on(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
 				uni.$on(NIM_EVENT.TOTAL_UNREAD_COUNT_CHANGED, this.scheduleConversationReload)
 				uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.scheduleConversationReload)
+				uni.$on(NIM_EVENT.P2P_READ_RECEIPTS, this.scheduleConversationReload)
 			},
 			unbindConversationEvents() {
 				uni.$off(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
 				uni.$off(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
 				uni.$off(NIM_EVENT.CONVERSATION_SYNC_STARTED, this.handleConversationSyncStarted)
-				uni.$off(NIM_EVENT.CONVERSATION_SYNC_FINISHED, this.scheduleConversationReload)
+				uni.$off(NIM_EVENT.CONVERSATION_SYNC_FINISHED, this.handleConversationSyncFinished)
 				uni.$off(NIM_EVENT.CONVERSATION_SYNC_FAILED, this.handleConversationLoadFailed)
 				uni.$off(NIM_EVENT.CONVERSATION_CREATED, this.handleConversationCreated)
 				uni.$off(NIM_EVENT.CONVERSATION_CHANGED, this.handleConversationChanged)
 				uni.$off(NIM_EVENT.CONVERSATION_DELETED, this.handleConversationDeleted)
 				uni.$off(NIM_EVENT.TOTAL_UNREAD_COUNT_CHANGED, this.scheduleConversationReload)
 				uni.$off(NIM_EVENT.MESSAGE_RECEIVED, this.scheduleConversationReload)
+				uni.$off(NIM_EVENT.P2P_READ_RECEIPTS, this.scheduleConversationReload)
 			},
 			handleLoginStatus(status) {
 				if (status !== 1) return
 				this.scheduleConversationReload()
 				this.loadHistoryConversations()
-				// 页面可能先于云信登录完成显示；登录成功后重新尝试打开路由指定的会话。
+				// 已同步时可以直接打开；首次登录仍由会话同步完成事件触发。
 				this.openRouteConversationAfterLoad()
 			},
 			handleNimLoginFailed(error) {
@@ -467,6 +470,11 @@
 			},
 			handleConversationSyncStarted() {
 				if (!this.rawConversations.length) this.isLoading = true
+			},
+			handleConversationSyncFinished() {
+				// 先发起同步后的列表查询，外链逻辑复用并等待同一个加载 Promise。
+				this.loadConversations()
+				this.openRouteConversationAfterLoad()
 			},
 			handleConversationLoadFailed(error) {
 				this.isLoading = false
@@ -538,7 +546,11 @@
 						this.handleConversationLoadFailed(loginError)
 						return
 					}
-					// App.vue 正在异步登录，成功后 LOGIN_STATUS 事件会触发实际加载。
+					// App.vue 正在异步登录，等待本地会话同步完成后实际加载。
+					this.isLoading = !this.rawConversations.length
+					return
+				}
+				if (!isNimConversationSynced()) {
 					this.isLoading = !this.rawConversations.length
 					return
 				}
@@ -552,7 +564,7 @@
 				// getAllNimConversations 会拉完全部分页，并批量获取 P2P 对方的网易云用户资料。
 				this._conversationLoadPromise = getAllNimConversations()
 					.then(conversationList => {
-						if (!this._conversationPageAlive) return
+						if (!this._conversationPageAlive || !isNimConversationSynced()) return
 						this.currentTime = Date.now()
 						this.rawConversations = conversationList
 					})
@@ -566,7 +578,7 @@
 						this._conversationLoadPromise = null
 						if (this._conversationReloadPending && this._conversationPageAlive) {
 							this._conversationReloadPending = false
-							this.loadConversations()
+							return this.loadConversations()
 						}
 					})
 
@@ -574,14 +586,15 @@
 			},
 			async openRouteConversationAfterLoad() {
 				if (!this.routePersonAccId || !this._conversationPageAlive || !this.pageVisible
-					|| !isNimLoggedIn() || this._routeConversationOpened || this._routeConversationPromise) return
+					|| !isNimConversationSynced() || this._routeConversationOpened || this._routeConversationPromise) return
 
-				// 等 SDK 会话列表完成后再查找，避免列表尚未返回时误判为新会话。
+				// 云信同步成功后，再等完整列表加载完成，才执行会话查找及后续逻辑。
 				this._routeConversationRetryAfterHide = false
 				this._routeConversationPromise = Promise.resolve(this._conversationLoadPromise || this.loadConversations())
 					.then(async () => {
 						// 列表加载失败时不能把“未加载到”当成“不存在”，尤其不能误删旧会话。
-						if (!this._conversationPageAlive || !this.pageVisible || this.loadError || this._routeConversationOpened) return
+						if (!this._conversationPageAlive || !this.pageVisible || !isNimConversationSynced()
+							|| this.loadError || this._routeConversationOpened) return
 						this.activeMainTab = 'recent'
 						this.activeMessageTab = 'all'
 
@@ -1385,6 +1398,8 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+
+	.conversation-read-state { color: #1688ee; }
 
 	.conversation-name {
 		font-size: 14px;

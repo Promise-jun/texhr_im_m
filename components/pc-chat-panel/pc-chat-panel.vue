@@ -198,7 +198,7 @@
 		NIM_EVENT, getNimInstance, isNimLoggedIn,
 		setActiveConversationId, getActiveConversationId, clearActiveConversationId
 	} from '../../services/nim'
-	import { markNimConversationRead, formatConversationTime } from '../../services/conversation'
+	import { markNimConversationRead, sendNimP2PReadReceipt, formatConversationTime } from '../../services/conversation'
 	import { requestApi } from '../../services/request'
 	import { getAudioMimeType, audioDurationSeconds, audioBubbleWidth, createPcAudioPlayer } from '../../services/pc-chat-audio'
 	import { NIM_EMOJIS, parseNimEmojiText } from '../../services/nim-emoji'
@@ -469,7 +469,10 @@
 			this.bindInputEvents()
 			// 浏览器切到后台时也停止语音，避免用户已离开页面却继续播放。
 			// #ifdef H5
-			this._audioVisibilityHandler = () => { if (document.hidden) this.stopAudio() }
+			this._audioVisibilityHandler = () => {
+				if (document.hidden) { this.stopAudio(); this.releaseCurrentConversation() }
+				else if (this.visible && this.accessReady) this.activateConversation()
+			}
 			document.addEventListener('visibilitychange', this._audioVisibilityHandler)
 			// 浮层和工具按钮阻止点击冒泡，点击页面其它区域或按 Escape 时关闭。
 			this._composerDismissHandler = event => {
@@ -740,6 +743,9 @@
 			},
 			activateConversation() {
 				if (!this.visible || !this.accessReady || !isNimLoggedIn()) return
+				// #ifdef H5
+				if (document.hidden) return
+				// #endif
 				setActiveConversationId(this.conversationId)
 				getNimInstance().V2NIMLocalConversationService.setCurrentConversation(this.conversationId)
 				this.markRead()
@@ -754,6 +760,14 @@
 			},
 			async markRead() {
 				if (!this.visible || !this.accessReady || !this._alive || !isNimLoggedIn()) return
+				// #ifdef H5
+				if (document.hidden) return
+				// #endif
+				const conversationId = this.conversationId
+				sendNimP2PReadReceipt(conversationId, this.messages, () => this._alive && this.visible && this.accessReady &&
+					this.conversationId === conversationId && (typeof document === 'undefined' || !document.hidden)).catch(error => {
+					console.warn('[PC Chat] 发送已读回执失败', error)
+				})
 				try {
 					await markNimConversationRead(this.conversationId)
 					if (this._alive && this.visible) this.$emit('read', this.conversationId)
@@ -812,6 +826,7 @@
 					if (!this._alive) return
 					if (!Array.isArray(list)) throw new Error('聊天记录格式不正确')
 					this.mergeMessages(list)
+					if (initial) this.markRead()
 					if (!initial || !hadHistory) {
 						const sorted = list.slice().sort((a, b) => Number(a.createTime) - Number(b.createTime))
 						this._oldestHistoryMessage = sorted[0] || anchor

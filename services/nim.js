@@ -18,12 +18,15 @@ export const NIM_EVENT = Object.freeze({
 	CONVERSATION_DELETED: 'nim:conversation-deleted',
 	TOTAL_UNREAD_COUNT_CHANGED: 'nim:total-unread-count-changed',
 	// SDK 收到一批新消息后统一转发给页面，避免每个页面重复直接绑定 SDK。
-	MESSAGE_RECEIVED: 'nim:message-received'
+	MESSAGE_RECEIVED: 'nim:message-received',
+	P2P_READ_RECEIPTS: 'nim:p2p-read-receipts'
 })
 
 let nimInstance = null
 let loginPromise = null
 let lastLoginError = null
+// 在单例层保留同步状态，页面晚于 onSyncFinished 创建时也能读取。
+let conversationSynced = false
 // 当前前台聊天会话 ID；消息列表页据此避免给正在查看的会话重复显示红点。
 let activeConversationId = ''
 
@@ -38,6 +41,7 @@ function bindLoginListeners(nim) {
 
 	loginService.on('onLoginStatus', status => {
 		if (status === 1) lastLoginError = null
+		else conversationSynced = false
 		console.log('[NIM] 登录成功', status)
 		emit(NIM_EVENT.LOGIN_STATUS, status)
 	})
@@ -46,6 +50,7 @@ function bindLoginListeners(nim) {
 		emit(NIM_EVENT.CONNECT_STATUS, status)
 	})
 	loginService.on('onLoginFailed', error => {
+		conversationSynced = false
 		lastLoginError = error
 		console.error('[NIM] 登录失败', error)
 		emit(NIM_EVENT.LOGIN_FAILED, error)
@@ -74,12 +79,15 @@ function bindConversationListeners(nim) {
 	}
 
 	conversationService.on('onSyncStarted', () => {
+		conversationSynced = false
 		emit(NIM_EVENT.CONVERSATION_SYNC_STARTED)
 	})
 	conversationService.on('onSyncFinished', () => {
+		conversationSynced = true
 		emit(NIM_EVENT.CONVERSATION_SYNC_FINISHED)
 	})
 	conversationService.on('onSyncFailed', error => {
+		conversationSynced = false
 		console.error('[NIM] 会话同步失败', error)
 		emit(NIM_EVENT.CONVERSATION_SYNC_FAILED, error)
 	})
@@ -115,6 +123,10 @@ function bindMessageListeners(nim) {
 		if (!receivedMessages.length) return
 		// 保留 SDK 原始消息对象，聊天页需要完整消息结构渲染文本、图片和语音。
 		emit(NIM_EVENT.MESSAGE_RECEIVED, receivedMessages)
+	})
+	// 单聊回执是对方读到的时间边界，供会话列表即时更新。
+	messageService.on('onReceiveP2PMessageReadReceipts', receipts => {
+		emit(NIM_EVENT.P2P_READ_RECEIPTS, Array.isArray(receipts) ? receipts : [])
 	})
 }
 
@@ -200,6 +212,7 @@ export function loginNim(account, token) {
 
 
 		if (loginStatus === 1 && loginService.getLoginUser() === accountId) return nim
+		conversationSynced = false
 		if (loginStatus === 1 || loginStatus === 2) await loginService.logout()
 
 		await loginService.login(accountId, token, {
@@ -214,6 +227,7 @@ export function loginNim(account, token) {
 }
 
 export async function logoutNim() {
+	conversationSynced = false
 	if (!nimInstance) return
 	const loginStatus = nimInstance.V2NIMLoginService.getLoginStatus()
 	if (loginStatus === 1 || loginStatus === 2) {
@@ -226,8 +240,7 @@ export function getNimInstance() {
 }
 
 /**
- * 会话页通过该状态判断是否可以读取本地会话缓存。
- * 登录中先等待 LOGIN_STATUS 或 CONVERSATION_SYNC_FINISHED 事件，不提前请求空数据。
+ * 判断云信账号是否已登录；本地会话完整性另由 isNimConversationSynced 判断。
  */
 export function isNimLoggedIn() {
 	return Boolean(
@@ -235,6 +248,11 @@ export function isNimLoggedIn() {
 		&& nimInstance.V2NIMLoginService
 		&& nimInstance.V2NIMLoginService.getLoginStatus() === 1
 	)
+}
+
+/** 仅在当前账号已登录且本地会话同步成功后返回 true。 */
+export function isNimConversationSynced() {
+	return isNimLoggedIn() && conversationSynced
 }
 
 export function getNimLoginError() {
@@ -258,6 +276,7 @@ export function clearActiveConversationId(conversationId) {
 }
 
 export async function destroyNim() {
+	conversationSynced = false
 	if (!nimInstance) {
 		activeConversationId = ''
 		return

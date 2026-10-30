@@ -25,6 +25,7 @@ function environment() {
       'CONVERSATION_CHANGED', 'CONVERSATION_DELETED', 'TOTAL_UNREAD_COUNT_CHANGED',
       'MESSAGE_RECEIVED'].map(name => [name, name])),
     isNimLoggedIn: () => state.loggedIn,
+    isNimConversationSynced: () => state.loggedIn,
     getNimLoginError: () => state.loginError,
     getNimInstance: () => ({
       V2NIMLoginService: { getLoginUser: () => 'enterprise-1' },
