@@ -1,5 +1,42 @@
 <template>
 	<view class="pc-chat-page" @click="closeConversationMenu()" @keydown.esc="closeConversationMenu()">
+		<view class="site-header">
+			<view class="site-header-inner">
+				<a class="site-logo" href="http://www.texhr.cn" target="_blank" rel="noopener noreferrer" aria-label="CFW 首页">
+					<image class="site-logo-image" src="/static/pc/logo.png" mode="aspectFit"></image>
+				</a>
+				<nav class="site-nav" aria-label="企业导航">
+					<view class="site-nav-group">
+						<a class="site-nav-link" href="http://www.texhr.cn/ehr/jobrecruit/?Active=1" target="_blank" rel="noopener noreferrer">职位管理<image class="nav-arrow" src="/static/pc/icon_down.png"></image></a>
+						<view class="site-submenu">
+							<a href="http://www.texhr.cn/ehr/jobpost/" target="_blank" rel="noopener noreferrer">发布职位</a>
+							<a href="http://www.texhr.cn/ehr/jobrecruit/?Active=1" target="_blank" rel="noopener noreferrer">标准职位</a>
+							<a href="http://www.texhr.cn/ehr/jobtemplate/" target="_blank" rel="noopener noreferrer">职位模板</a>
+							<a href="http://www.texhr.cn/ehr/jobcomment/" target="_blank" rel="noopener noreferrer">职位留言</a>
+						</view>
+					</view>
+					<view class="site-nav-group">
+						<a class="site-nav-link" href="http://www.texhr.cn/ehr/resumereceive/" target="_blank" rel="noopener noreferrer">应聘管理<image class="nav-arrow" src="/static/pc/icon_down.png"></image></a>
+						<view class="site-submenu">
+							<a href="http://www.texhr.cn/ehr/resumereceive/" target="_blank" rel="noopener noreferrer">标准简历</a>
+							<a href="http://www.texhr.cn/ehr/interviewtemplate/" target="_blank" rel="noopener noreferrer">面试模板</a>
+						</view>
+					</view>
+				</nav>
+				<view class="site-nav-right">
+					<a class="site-nav-link" href="http://www.texhr.cn/ehr/resumesearch/" target="_blank" rel="noopener noreferrer"><image class="nav-icon" src="/static/pc/icon_search.png"></image>简历搜索</a>
+					<view class="site-nav-link site-nav-link--active" aria-current="page"><image class="nav-icon" src="/static/pc/icon_chat.png"></image>沟通</view>
+					<view class="site-nav-group company-menu">
+						<a class="site-nav-link company-link" href="http://www.texhr.cn/ehr/basicinformation/" target="_blank" rel="noopener noreferrer" :title="companyName || '企业账号'"><text class="company-name">{{ companyName || '企业账号' }}</text><image class="nav-arrow" src="/static/pc/icon_down.png"></image></a>
+						<view class="site-submenu site-submenu--right">
+							<a href="http://www.texhr.cn/ehr/basicinformation/" target="_blank" rel="noopener noreferrer">账号设置</a>
+							<view class="site-submenu-action" role="button" tabindex="0" @click="confirmLogout"
+								@keydown.enter.prevent="confirmLogout" @keydown.space.prevent="confirmLogout">退出登录</view>
+						</view>
+					</view>
+				</view>
+			</view>
+		</view>
 		<view class="chat-shell">
 			<view class="top-bar">
 				<view class="main-tabs">
@@ -157,11 +194,12 @@
 	import {
 		getHistoryChatJobState, getHistoryChatButton, changeHistoryChatJob, getPcHistoryChatJobList
 	} from '../../../services/chat-history'
-	import { requestApi } from '../../../services/request'
+	import { createRequestPayload, requestApi } from '../../../services/request'
 	import PcChatPanel from '../../../components/pc-chat-panel/pc-chat-panel.vue'
 	import PcChatHistoryPanel from '../../../components/pc-chat-history-panel/pc-chat-history-panel.vue'
 
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
+	const COMPANY_INFORMATION_API = 'Enterprise.BasicInformation.GetById'
 	const CONTINUE_CHAT_TEXT = '好久没互动了，我对你简历很感兴趣，快来聊聊~'
 	const PC_JOB_LIST_API = 'Chat.Chat.GetJobList'
 	const CHAT_SAVE_API = 'Chat.Chat.Save'
@@ -172,6 +210,7 @@
 		components: { PcChatPanel, PcChatHistoryPanel },
 		data() {
 			return {
+				companyName: '',
 				activeMainTab: 'recent',
 				activeMessageTab: 'all',
 				// 外部链接可通过 personAccId 指定进入某个人才的实时会话。
@@ -268,6 +307,7 @@
 		},
 		onLoad(options = {}) {
 			this._conversationPageAlive = true
+			this._companyNameRequestId = 0
 			this._historyConversationsLoaded = false
 			this._openConversationRequestId = 0
 			this._continueHistoryRequestId = 0
@@ -286,6 +326,7 @@
 		},
 		onShow() {
 			this.pageVisible = true
+			this.loadCompanyName()
 			this.showExpiredRouteNotice()
 			// 页面恢复显示时主动刷新，覆盖页面隐藏期间发生的会话变化。
 			this.currentTime = Date.now()
@@ -312,6 +353,42 @@
 			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
 		},
 		methods: {
+			confirmLogout() {
+				uni.showModal({
+					title: '退出登录',
+					content: '确定退出登录吗？',
+					confirmText: '退出登录',
+					confirmColor: '#f37324',
+					success: result => {
+						if (result.confirm && typeof window !== 'undefined') {
+							window.location.href = 'http://www.texhr.cn/ehr/loginout/'
+						}
+					}
+				})
+			},
+			async loadCompanyName() {
+				const requestId = ++this._companyNameRequestId
+				this.companyName = ''
+				try {
+					// 取与网关外层一致的企业鉴权，接口还要求在 Content 中传入这些字段。
+					const auth = createRequestPayload({ Name: COMPANY_INFORMATION_API })
+					const response = await requestApi({
+						Name: COMPANY_INFORMATION_API,
+						Content: { EnterpriseId: String(auth.EnterpriseId), AccountToken: auth.Token,
+							EnterpriseType: String(auth.EnterpriseType) }
+					})
+					if (!response || response.Code === undefined || Number(response.Code) !== 0) return
+					let data = response.Data
+					if (typeof data === 'string') data = JSON.parse(data)
+					if (!data || typeof data !== 'object' || Array.isArray(data)
+						|| (data.Code !== undefined && Number(data.Code) !== 0)) return
+					if (this._conversationPageAlive && this.pageVisible && requestId === this._companyNameRequestId) {
+						this.companyName = typeof data.CompanyName === 'string' ? data.CompanyName.trim() : ''
+					}
+				} catch (error) {
+					console.error('[PC Chat] 获取企业名称失败', error)
+				}
+			},
 			openConversationMenu(conversation, event) {
 				if (this.activeMainTab !== 'recent' || !conversation || conversation.type !== 1
 					|| this.updatingPinConversationId || this.deletingConversationId) return
@@ -1216,6 +1293,77 @@
 		font-family: "Microsoft YaHei", Arial, sans-serif;
 	}
 
+	.site-header {
+		box-sizing: border-box;
+		height: 68px;
+		background: #ffffff;
+		border-bottom: 1px solid #eeeeee;
+	}
+
+	.site-header-inner {
+		display: flex;
+		align-items: center;
+		width: 1140px;
+		height: 100%;
+		margin: 0 auto;
+	}
+
+	.site-logo {
+		display: flex;
+		align-items: center;
+		flex: 0 0 120px;
+		margin-right: 48px;
+	}
+
+	.site-logo-image { width: 120px; height: 42px; }
+	.site-nav, .site-nav-right { display: flex; align-items: stretch; height: 100%; }
+	.site-nav-right { margin-left: auto; }
+	.site-nav-group { position: relative; height: 100%; }
+	.site-nav-link {
+		display: flex;
+		align-items: center;
+		box-sizing: border-box;
+		height: 100%;
+		padding: 0 16px;
+		color: #465365;
+		font-size: 14px;
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.site-nav-link:hover, .site-nav-link:focus, .site-nav-link--active { color: #f37324; }
+	.nav-arrow { width: 10px; height: 10px; margin-left: 7px; }
+	.nav-icon { width: 15px; height: 15px; margin-right: 5px; }
+	.site-nav-link:hover .nav-icon, .site-nav-link:focus .nav-icon, .site-nav-link--active .nav-icon {
+		filter: brightness(0) saturate(100%) invert(55%) sepia(92%) saturate(1943%) hue-rotate(341deg) brightness(100%) contrast(91%);
+	}
+	.company-link { padding-right: 0; }
+	.company-name { display: block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.site-submenu {
+		display: none;
+		position: absolute;
+		z-index: 20;
+		top: 100%;
+		left: 0;
+		min-width: 100px;
+		padding: 5px 0;
+		background: #ffffff;
+		box-shadow: 0 2px 5px rgba(0, 0, 0, 0.12);
+	}
+	.site-submenu--right { right: 0; left: auto; }
+	.site-nav-group:hover .site-submenu, .site-nav-group:focus-within .site-submenu { display: block; }
+	.site-submenu a, .site-submenu-action {
+		display: block;
+		box-sizing: border-box;
+		padding: 9px 21px;
+		color: #465365;
+		font-size: 14px;
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.site-submenu a:hover, .site-submenu a:focus,
+	.site-submenu-action:hover, .site-submenu-action:focus { color: #f37324; background: #f5f7fa; }
+	.site-submenu-action { cursor: pointer; }
+
 	.chat-shell {
 		width: 1140px;
 		margin: 20px auto 0;
@@ -1271,7 +1419,7 @@
 	.chat-workspace {
 		display: flex;
 		box-sizing: border-box;
-		height: calc(100vh - 89px);
+		height: calc(100vh - 157px);
 		min-height: 560px;
 		padding: 15px;
 		background: #eef0f2;
