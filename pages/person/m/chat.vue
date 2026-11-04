@@ -237,7 +237,7 @@
 				</view>
 				<view class="quick-reply-body">
 					<textarea v-model="quickReplyText" class="quick-reply-input" maxlength="300"
-						placeholder="可输入300字，可输入您常用回复，请不要填写QQ、微信等联系方式或广告，否则系统将封禁您的账号。"
+						placeholder="最多300字，可输入常用回复，请不要填写qq，微信号等联系方式，低俗内容，恶意信息或广告，一经发现封禁账号。"
 						placeholder-class="quick-reply-placeholder" />
 					<text class="quick-reply-count">{{ quickReplyText.length }}/300</text>
 				</view>
@@ -303,8 +303,7 @@
 		parseNimEmojiText
 	} from '../../../services/nim-emoji'
 	import {
-		getExternalReturnUrl,
-		navigateBackWithExternal
+		getExternalReturnUrl
 	} from '../../../services/navigation'
 
 	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
@@ -933,7 +932,7 @@
 				if (this.isCheckingLimits) return
 
 				if (!this.jobId) {
-					this.historyLoadError = '缺少 jobId 或 resumeId'
+					this.historyLoadError = '缺少 jobId'
 					return
 				}
 
@@ -1682,7 +1681,7 @@
 				}
 			},
 			navigateBack() {
-				navigateBackWithExternal(this.externalReturnUrl, '/pages/person/m/list')
+				window.history.back()
 			},
 			navigateByStep(stepName) {
 				const normalizedStepName = String(stepName || '').trim()

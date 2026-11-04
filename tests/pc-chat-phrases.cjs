@@ -368,7 +368,7 @@ async function verify() {
   }
   console.log('PASS: SuccessStep and account checks take priority; cancellation, stale prompts, failed requests and repeated clicks cannot send switch messages')
 
-  for (const [index, stepName] of ['升级', '立即升级', '立即开通'].entries()) {
+  for (const [index, stepName] of ['升级', '立即升级', '立即开通', '申请开通'].entries()) {
     const upgrade = environment()
     upgrade.request(async args => {
       if (args.Name === 'Chat.MyChat.Limits') {
@@ -405,7 +405,7 @@ async function verify() {
     assert.equal(upgrade.state.historyLoads, 0)
     assert.equal(upgrade.sends.length, 0)
   }
-  console.log('PASS: all three upgrade StepNames request Enterprise.Service.UpGrade Type=9 only after confirmation and return only after confirming Tips')
+  console.log('PASS: all four upgrade StepNames request Enterprise.Service.UpGrade Type=9 only after confirmation and return only after confirming Tips')
 
   const upload = environment()
   upload.request(async () => ({ Code: 0, Data: { SuccessStep: { Tips: '请上传资质', StepName: '立即上传' } } }))

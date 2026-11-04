@@ -48,14 +48,6 @@ async function verify() {
     parseNimEmojiText: text => [{ type: 'text', content: text }],
     setActiveConversationId() {},
     getExternalReturnUrl: options => String(options && options.returnUrl || '').trim(),
-    navigateBackWithExternal: (externalReturnUrl, fallbackUrl = '') => {
-      if (externalReturnUrl) {
-        browserLocation.href = externalReturnUrl
-        return true
-      }
-      pageBackCount += 1
-      return true
-    },
     requestApi: async args => {
       calls.push(args)
       if (args.Name === 'Chat.MyChat.Limits') {
@@ -88,7 +80,7 @@ async function verify() {
       }
       throw new Error(`unexpected API: ${args.Name}`)
     },
-    window: { location: browserLocation },
+    window: { location: browserLocation, history: { back: () => { pageBackCount += 1 } } },
     uni: {
       getSystemInfoSync: () => ({}),
       $on() {},

@@ -82,8 +82,7 @@
 	} from '../../../services/request'
 	import {
 		appendExternalReturnUrl,
-		getExternalReturnUrl,
-		navigateBackWithExternal
+		getExternalReturnUrl
 	} from '../../../services/navigation'
 
 	const CHAT_SAVE_API = 'Chat.Chat.Save'
@@ -646,7 +645,7 @@
 				this.loadConversations()
 			},
 			navigateBack() {
-				navigateBackWithExternal(this.externalReturnUrl)
+				window.history.back()
 			},
 
 			async openConversation(conversation) {

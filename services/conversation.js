@@ -151,7 +151,7 @@ export async function getAllNimConversations() {
 	const loginService = nim.V2NIMLoginService
 	const account = loginService && typeof loginService.getLoginUser === 'function' ? loginService.getLoginUser() : ''
 	if (!account || !messageService || typeof messageService.getP2PMessageReceipt !== 'function') return conversations
-	// 只查询自己发送的最新单聊消息；查询失败时状态保持未知，不误报未读。
+	// 只查询自己发送的最新单聊消息；查询失败时状态保持未知，不误报已读。
 	return Promise.all(conversations.map(async conversation => {
 		const last = conversation.lastMessage
 		const refer = last && last.messageRefer
@@ -378,7 +378,7 @@ export function normalizeConversation(conversation, now = Date.now()) {
 		conversation.peerReadSender === refer.senderId && conversation.peerReadMessageId === refer.messageClientId &&
 		conversation.peerReadMessageTime === Number(refer.createTime) &&
 		Number(last.lastMessageState || 0) === 0 && ![2, 3].includes(Number(last.sendingState))
-		? (Number(conversation.peerReadTimestamp) >= Number(refer.createTime) ? '已读' : '未读') : ''
+		&& Number(conversation.peerReadTimestamp) >= Number(refer.createTime) ? '已读' : ''
 
 	return {
 		id: conversationId,

@@ -47,7 +47,7 @@
 				</view>
 				<view class="service-phone">
 					<image src="/static/pc/icon_phone.png" class="phone-icon"></image>
-					<text>400-672-6626</text>
+					<text>400-672-6607</text>
 				</view>
 			</view>
 

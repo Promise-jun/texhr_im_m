@@ -120,8 +120,7 @@
 	} from '../../../services/chat-history'
 	import {
 		appendExternalReturnUrl,
-		getExternalReturnUrl,
-		navigateBackWithExternal
+		getExternalReturnUrl
 	} from '../../../services/navigation'
 	import UniPopup from '../../../uni_modules/uni-popup/components/uni-popup/uni-popup.vue'
 
@@ -451,7 +450,7 @@
 				})
 			},
 			navigateBack() {
-				navigateBackWithExternal(this.externalReturnUrl, '/pages/person/m/list')
+				window.history.back()
 			},
 			handleAvatarError(message) {
 				if (!this.failedAvatarIds.includes(message.id)) this.failedAvatarIds.push(message.id)

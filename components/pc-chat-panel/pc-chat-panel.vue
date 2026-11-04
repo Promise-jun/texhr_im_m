@@ -560,9 +560,9 @@
 						uni.showModal({
 							content: String(successStep.Tips || ''),
 							confirmText: stepName || '确定',
-							showCancel: false,
 							success: result => {
 								// 确认后统一按 Limits.SuccessStep.StepName 执行页面跳转或升级申请。
+								if (result && result.cancel) this.navigateBack()
 								if (result && result.confirm) return this.navigateByStep(stepName)
 							}
 						})
@@ -616,7 +616,7 @@
 			navigateByStep(stepName) {
 				if (!this._alive || !this.visible || this.opening) return
 				const name = String(stepName || '').trim()
-				if (['升级', '立即升级', '立即开通'].includes(name)) return this.requestChatUpgrade()
+				if (['升级', '立即升级', '立即开通', '申请开通'].includes(name)) return this.requestChatUpgrade()
 				if (name === '立即上传') {
 					// 资质上传直接在用户点击确认时打开新窗口，保留当前聊天页面。
 					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
@@ -643,7 +643,7 @@
 						}
 						const tips = data.Tips !== undefined ? data.Tips : response.Tips
 						uni.showModal({
-							title: '提示', content: String(tips === undefined || tips === null ? '' : tips),
+							title: '提示', content: "已成功接收您的需求,工作人员会在1个工作日内与您联系.",
 							confirmText: '确定', showCancel: false,
 							success: result => {
 								// 升级申请成功后仅在用户确认 Tips 时返回上一页，旧会话回调不再触发跳转。
@@ -657,14 +657,8 @@
 				return this._chatUpgradePromise
 			},
 			navigateBack() {
-				// PC 聊天页可从站外进入，优先使用浏览器历史返回上一页。
-				// #ifdef H5
-				if (typeof window !== 'undefined' && window.history && typeof window.history.back === 'function') {
-					window.history.back()
-					return
-				}
-				// #endif
-				uni.navigateBack({ delta: 1 })
+				console.log(123123)
+				window.close()
 			},
 			isCurrentChatGreeting(greeting) {
 				return Boolean(greeting && this._alive && this.accessReady

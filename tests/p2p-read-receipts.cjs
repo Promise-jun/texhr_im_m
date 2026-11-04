@@ -36,7 +36,7 @@ async function main() {
   list = [conversation('c', 'self', 100), conversation('incoming', 'other', 100),
     conversation('failed', 'self', 100, { sendingState: 2 })]
   let rows = await context.getAllNimConversations()
-  assert.equal(context.normalizeConversation(rows[0]).readState, '未读')
+	assert.equal(context.normalizeConversation(rows[0]).readState, '')
   assert.equal(context.normalizeConversation(rows[1]).readState, '')
   assert.equal(context.normalizeConversation(rows[2]).readState, '')
   receiptTime = 100
