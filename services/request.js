@@ -56,7 +56,10 @@ function showSpecialCodeMessage(responseData) {
 	uni.showModal({
 		title: '提示',
 		content: message,
-		showCancel: false
+		showCancel: false,
+		success: result => {
+			if (result && result.confirm) location.replace('http://www.texhr.cn/ehr/login.html')
+		}
 	})
 }
 
@@ -177,13 +180,13 @@ function getAuthFromCookie(isEnterprise) {
 	// 判断是否包含 ehr（区分大小写，EHR 匹配不到）
 	if (url.includes('ehr')) {
 		return {
-			EnterpriseId: 194631,
-			Token: 'siSnQsgWl33b8PLxSY5m',
+			EnterpriseId: 198235,
+			Token: 'JzvKudVD-_DCRgQa2oYU',
 		}
 	} else {
 		return {
-			PersonId: 210902,
-			Token: 'GvRSp22xXvmL3bleplWt'
+			PersonId: 248665,
+			Token: 'MU-UM3xfYI1ZtAXbpbi8',
 		}
 	}
 

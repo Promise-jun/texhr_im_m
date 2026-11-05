@@ -73,7 +73,7 @@
 								@error="handleAvatarError(conversation)"></image>
 							<view class="conversation-copy">
 								<text class="conversation-name">{{ conversation.name }}</text>
-								<view class="conversation-preview"><text v-if="conversation.readState" class="conversation-read-state">[{{ conversation.readState }}] </text><text>{{ conversation.message }}</text></view>
+								<view class="conversation-preview"><text v-if="conversation.readState" class="conversation-read-state">[{{ conversation.readState }}] </text><text class="conversation-message">{{ conversation.message }}</text></view>
 							</view>
 							<view class="conversation-meta" @mouseleave="closeConversationMenu(conversation)">
 								<!-- 悬停时间后原位显示三个点；菜单与时间同属一个容器，移入菜单不会提前关闭。 -->
@@ -1539,15 +1539,22 @@
 		min-width: 0;
 	}
 
-	.conversation-name,
-	.conversation-preview {
+	.conversation-name {
 		display: block;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
-	.conversation-read-state { color: #1688ee; }
+	.conversation-preview {
+		display: flex;
+		min-width: 0;
+		overflow: hidden;
+		white-space: nowrap;
+	}
+
+	.conversation-read-state { flex: 0 0 auto; color: #1688ee; white-space: nowrap; }
+	.conversation-message { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	.conversation-name {
 		font-size: 14px;
@@ -1889,15 +1896,16 @@
 		align-items: center;
 		justify-content: center;
 		box-sizing: border-box;
-		width: 114px;
+		width: 100px;
 		height: 36px;
-		margin-top: 29px;
-		font-size: 18px;
-		font-weight: 700;
+		margin-top: 30px;
+		font-size: 14px;
+		font-weight: 600;
 		color: #ffffff;
-		background: #f66b20;
+		background: #ff6e22;
 		cursor: pointer;
 		transition: background-color 0.15s ease;
+		border-radius: 4px;
 
 		&:hover {
 			background: #ed5e15;

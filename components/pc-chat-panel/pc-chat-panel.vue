@@ -657,7 +657,6 @@
 				return this._chatUpgradePromise
 			},
 			navigateBack() {
-				console.log(123123)
 				window.close()
 			},
 			isCurrentChatGreeting(greeting) {
