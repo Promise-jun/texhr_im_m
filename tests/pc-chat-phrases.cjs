@@ -3,6 +3,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const maskPhoneNumbers = require('./mask-phone-helper.cjs')
 const root = path.resolve(__dirname, '..')
 const source = fs.readFileSync(path.join(root, 'components/pc-chat-panel/pc-chat-panel.vue'), 'utf8')
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
@@ -33,7 +34,7 @@ function environment(options = {}) {
       return send(message, id)
     } }
   }
-  const context = vm.createContext({ module: { exports: {} }, console: { warn() {} },
+  const context = vm.createContext({ module: { exports: {} }, maskPhoneNumbers, console: { warn() {} },
     NIM_EMOJIS: [], getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
     uni: { showToast: value => toasts.push(value.title), showModal: value => modals.push(value),
       navigateBack: () => { state.uniBack++ } },
@@ -144,6 +145,10 @@ async function verify() {
   assert.equal(greeting.state.historyLoads, 1)
   assert.equal(greeting.modals.length, 0)
   console.log('PASS: matching jobs request Greetings by ResumeId and send the type=4 custom message before the text greeting')
+
+  const maskedGreeting = greetingEnvironment(undefined, { Code: 0, Data: { Greetings: '13812345678' } })
+  await maskedGreeting.panel.loadChatAccess()
+  assert.equal(maskedGreeting.sends[1].text, '138****5678')
 
   const rootGreeting = greetingEnvironment(
     { Code: 0, Data: '{}', JobId: ' job ', Message: '{"Person":{"PersonName":"字符串内容"}}' },

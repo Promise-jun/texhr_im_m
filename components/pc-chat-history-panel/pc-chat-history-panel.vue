@@ -160,7 +160,7 @@
 				this._keepAtBottom = false
 			},
 			messageAvatar(message) {
-				return !message.avatar || this.failedAvatars[message.avatar] ? DEFAULT_AVATAR : message.avatar
+				return !message.avatar || this.failedAvatars[message.avatar] ? (message.fallbackAvatar || DEFAULT_AVATAR) : message.avatar
 			},
 			handleAvatarError(avatar) { this.$set(this.failedAvatars, avatar, true) },
 			viewResume() {

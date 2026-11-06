@@ -48,7 +48,8 @@ function environment() {
   }
   const serviceContext = vm.createContext({ ...globals })
   vm.runInContext(serviceSource.replace(/import[^\n]+\n/g, '').replace(/^export /gm, ''), serviceContext)
-  for (const name of ['getAllHistoryConversations', 'getAllNimConversations', 'normalizeAndSortConversations']) {
+  for (const name of ['getAllHistoryConversations', 'getHistoryConversationsPage',
+    'getAllNimConversations', 'normalizeAndSortConversations']) {
     globals[name] = serviceContext[name]
   }
   const context = vm.createContext(globals)
@@ -80,7 +81,7 @@ async function verify() {
   env.enter()
   assert.equal(env.calls.length, 1)
   assert.deepStrictEqual(JSON.parse(JSON.stringify(env.calls[0])), {
-    Name: 'Chat.Chat.GetAllSessions', Content: { accid: 'enterprise-1' }
+    Name: 'Chat.Chat.GetAllSessions', Content: { accid: 'enterprise-1', start: 1 }
   })
   env.page.switchMainTab('history')
   assert.equal(env.page.visibleIsLoading, true)
@@ -95,6 +96,8 @@ async function verify() {
   assert.equal(first.message, '你好')
   assert.equal(first.time, '09:30')
   assert.equal(env.page.visibleConversations[1].time, '昨天 10:00')
+  assert.equal(env.page.historyPage, 1)
+  assert.equal(env.page.hasMoreHistoryConversations, true)
   // 历史列表不受最近会话的未读筛选、同步失败及实时通知影响。
   env.page.activeMessageTab = 'unread'
   env.emit('CONVERSATION_SYNC_FAILED', new Error('SDK 同步失败'))
@@ -110,6 +113,31 @@ async function verify() {
   assert.equal(env.page.unreadTotal, 3)
   env.unload()
   assert.equal(env.listeners.size, 0)
+
+  // PC 历史会话按 start 页码触底加载，空页表示列表结束。
+  const paged = environment()
+  const firstPage = [{ Accid: 'person-1' }, { Accid: 'person-2' }]
+  const secondPage = [{ Accid: 'person-3' }]
+  paged.request(async ({ Content }) => ({
+    Code: 0,
+    Data: { Sessions: Content.start === 1 ? firstPage : Content.start === 2 ? secondPage : [] }
+  }))
+  paged.enter()
+  await paged.page.loadHistoryConversations()
+  paged.page.switchMainTab('history')
+  assert.equal(paged.page.visibleConversations.length, 2)
+  paged.page.$refs = { conversationList: { clientHeight: 300, scrollHeight: 800 } }
+  await paged.page.handleConversationListScroll({ currentTarget: {}, detail: { scrollTop: 476 } })
+  assert.equal(paged.page.historyPage, 2)
+  assert.equal(paged.page.visibleConversations.length, 3)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(paged.calls.map(call => call.Content.start))), [1, 2])
+  await paged.page.handleConversationListScroll({ currentTarget: {
+    scrollTop: 476, clientHeight: 300, scrollHeight: 800
+  } })
+  assert.equal(paged.page.hasMoreHistoryConversations, false)
+  assert.equal(paged.page.historyPage, 2)
+  assert.equal(paged.calls.length, 3)
+  paged.unload()
 
   // 登录未完成时等待；登录失败停止加载，恢复登录后请求。
   const delayed = environment()

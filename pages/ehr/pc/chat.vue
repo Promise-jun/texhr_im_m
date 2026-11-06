@@ -58,12 +58,13 @@
 							:class="{ 'message-tab--active': activeMessageTab === tab.key }"
 							@click="activeMessageTab = tab.key">
 							<text>{{ tab.label }}</text>
-							<text v-if="tab.key === 'unread' && unreadTotal" class="tab-badge">{{ unreadTotal }}</text>
+							<text v-if="tab.key === 'unread' && unreadTotal" class="tab-badge">{{ unreadTotal > 99 ? '99+' : unreadTotal }}</text>
 						</view>
 					</view>
 
-					<view class="conversation-list" :class="{ 'conversation-list--full': activeMainTab === 'history' }"
-						@scroll="closeConversationMenu()">
+					<view ref="conversationList" class="conversation-list"
+						:class="{ 'conversation-list--full': activeMainTab === 'history' }"
+						@scroll="handleConversationListScroll">
 						<view v-for="conversation in visibleConversations" :key="conversation.id"
 							class="conversation-item" :class="{ 'conversation-item--selected': visibleSelectedId === conversation.id,
 								'conversation-item--opening': openingConversationId === conversation.id,
@@ -73,15 +74,18 @@
 								@error="handleAvatarError(conversation)"></image>
 							<view class="conversation-copy">
 								<text class="conversation-name">{{ conversation.name }}</text>
-								<view class="conversation-preview"><text v-if="conversation.readState" class="conversation-read-state">[{{ conversation.readState }}] </text><text class="conversation-message">{{ conversation.message }}</text></view>
+								<view class="conversation-preview">
+									<text v-if="conversation.readState" class="conversation-read-state">[{{ conversation.readState }}] </text>
+									<view class="conversation-message">{{ singleLinePreview(conversation.message) }}</view>
+								</view>
 							</view>
 							<view class="conversation-meta" @mouseleave="closeConversationMenu(conversation)">
 								<!-- 悬停时间后原位显示三个点；菜单与时间同属一个容器，移入菜单不会提前关闭。 -->
-								<view class="conversation-meta-top" @mouseenter="openConversationMenu(conversation, $event)">
+								<view class="conversation-meta-top" @mouseenter="openConversationMenu(conversation)">
 									<text class="conversation-time">{{ conversation.time }}</text>
 									<view v-if="activeMainTab === 'recent' && conversation.type === 1"
 										class="conversation-menu-trigger" role="button" aria-label="会话操作"
-										@click.stop="openConversationMenu(conversation, $event)">
+										@click.stop="openConversationMenu(conversation)">
 										<text></text><text></text><text></text>
 									</view>
 								</view>
@@ -114,6 +118,13 @@
 						<view v-else-if="!visibleConversations.length" class="conversation-empty">
 							{{ activeMainTab === 'recent' && activeMessageTab === 'unread' ? '暂无未读消息' : '暂无会话' }}
 						</view>
+						<button v-if="activeMainTab === 'history' && hasMoreHistoryConversations"
+							class="conversation-load-more" :disabled="isHistoryLoadingMore"
+							@click.stop="loadMoreHistoryConversations">
+							{{ isHistoryLoadingMore ? '正在加载更多...' : historyLoadMoreError ? '加载失败，点击重试' : '加载更多' }}
+						</button>
+						<view v-else-if="activeMainTab === 'history' && historyConversations.length"
+							class="conversation-list-end">没有更多会话了</view>
 					</view>
 				</view>
 
@@ -188,13 +199,14 @@
 	} from '../../../services/nim'
 	import {
 		getAllNimConversations,
-		getAllHistoryConversations,
+		getHistoryConversationsPage,
 		normalizeAndSortConversations
 	} from '../../../services/conversation'
 	import {
 		getHistoryChatJobState, getHistoryChatButton, changeHistoryChatJob, getPcHistoryChatJobList
 	} from '../../../services/chat-history'
 	import { createRequestPayload, requestApi } from '../../../services/request'
+	import { getTalentAvatar } from '../../../services/talent-avatar'
 	import PcChatPanel from '../../../components/pc-chat-panel/pc-chat-panel.vue'
 	import PcChatHistoryPanel from '../../../components/pc-chat-history-panel/pc-chat-history-panel.vue'
 
@@ -241,10 +253,14 @@
 				conversationDrafts: {},
 				rawConversations: [],
 				historyConversations: [],
+				historyPage: 0,
+				hasMoreHistoryConversations: false,
 				isLoading: true,
 				isHistoryLoading: true,
+				isHistoryLoadingMore: false,
 				loadError: '',
 				historyLoadError: '',
+				historyLoadMoreError: '',
 				currentTime: Date.now(),
 				// 记录加载失败的远程头像 URL；资料更新成新 URL 后会自动重新尝试加载。
 				failedAvatarMap: {},
@@ -353,6 +369,71 @@
 			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
 		},
 		methods: {
+			// 历史列表滚动到底部时请求下一页；最近会话仍沿用原有滚动行为。
+			handleConversationListScroll(event) {
+				this.closeConversationMenu()
+				if (this.activeMainTab !== 'history' || !this.hasMoreHistoryConversations || this.isHistoryLoadingMore) {
+					return
+				}
+
+				// uni-app 的滚动事件可能只提供 detail.scrollTop，容器尺寸从 ref 读取。
+				const eventElement = event && (event.currentTarget || event.target)
+				const listRef = this.$refs && this.$refs.conversationList
+				const listElement = listRef && (listRef.$el || listRef)
+				const element = eventElement && Number(eventElement.clientHeight) > 0
+					? eventElement : listElement
+				const detail = event && event.detail
+				const scrollTop = Number(detail && detail.scrollTop !== undefined
+					? detail.scrollTop : element && element.scrollTop)
+				const clientHeight = Number(element && element.clientHeight)
+				const scrollHeight = Number(element && element.scrollHeight)
+				if (clientHeight > 0 && scrollTop + clientHeight >= scrollHeight - 24) {
+					return this.loadMoreHistoryConversations()
+				}
+			},
+			async loadMoreHistoryConversations() {
+				if (this.activeMainTab !== 'history' || !this.hasMoreHistoryConversations ||
+					!this._historyConversationsLoaded) return
+				if (this._historyConversationLoadMorePromise) return this._historyConversationLoadMorePromise
+
+				const nextPage = this.historyPage + 1
+				this.isHistoryLoadingMore = true
+				this.historyLoadMoreError = ''
+				this._historyConversationLoadMorePromise = getHistoryConversationsPage(nextPage)
+					.then(conversationList => {
+						if (!this._conversationPageAlive) return
+						if (!conversationList.length) {
+							this.hasMoreHistoryConversations = false
+							return
+						}
+
+						// 接口按页返回；合并时按人才 Accid 去重，防止相邻页重复项。
+						const knownTargetIds = new Set(this.historyConversations.map(item => String(item.targetId)))
+						const newConversations = conversationList.filter(item => {
+							const targetId = String(item.targetId || '')
+							if (!targetId || knownTargetIds.has(targetId)) return false
+							knownTargetIds.add(targetId)
+							return true
+						})
+						this.historyConversations = this.historyConversations.concat(newConversations)
+						this.historyPage = nextPage
+						this.hasMoreHistoryConversations = true
+					})
+					.catch(error => {
+						if (!this._conversationPageAlive) return
+						console.error('[NIM] PC 端加载更多历史会话失败', error)
+						this.historyLoadMoreError = error && error.message ? error.message : '历史会话加载失败'
+					})
+					.finally(() => {
+						if (this._conversationPageAlive) this.isHistoryLoadingMore = false
+						this._historyConversationLoadMorePromise = null
+					})
+
+				return this._historyConversationLoadMorePromise
+			},
+			singleLinePreview(message) {
+				return String(message || '').replace(/\s+/g, ' ').trim()
+			},
 			confirmLogout() {
 				uni.showModal({
 					title: '退出登录',
@@ -389,15 +470,30 @@
 					console.error('[PC Chat] 获取企业名称失败', error)
 				}
 			},
-			openConversationMenu(conversation, event) {
+			openConversationMenu(conversation) {
 				if (this.activeMainTab !== 'recent' || !conversation || conversation.type !== 1
 					|| this.updatingPinConversationId || this.deletingConversationId) return
 				this.conversationMenuAbove = false
-				// 列表底部空间不足时向上展开，避免菜单被滚动容器裁切。
-				const target = event && event.currentTarget
-				const list = target && typeof target.closest === 'function' ? target.closest('.conversation-list') : null
-				if (list) this.conversationMenuAbove = target.getBoundingClientRect().bottom + 80 > list.getBoundingClientRect().bottom
 				this.activeConversationMenuId = conversation.id
+				// 菜单渲染后测量实际占用空间，避免滚动容器裁切。
+				this.$nextTick(() => {
+					if (this.activeConversationMenuId !== conversation.id) return
+					const listRef = this.$refs && this.$refs.conversationList
+					let list = listRef && (listRef.$el || listRef)
+					if ((!list || typeof list.querySelector !== 'function') && typeof document !== 'undefined') {
+						list = document.querySelector('.conversation-list')
+					}
+					if (!list || typeof list.querySelector !== 'function') return
+					const row = list.querySelector('.conversation-item--menu-open')
+					const menu = row && row.querySelector('.conversation-action-menu')
+					if (!row || !menu) return
+					const listRect = list.getBoundingClientRect()
+					const rowRect = row.getBoundingClientRect()
+					const menuRect = menu.getBoundingClientRect()
+					const availableBelow = listRect.bottom - menuRect.top
+					const availableAbove = rowRect.top + 16 - listRect.top
+					this.conversationMenuAbove = availableBelow < menuRect.height && availableAbove > availableBelow
+				})
 			},
 			closeConversationMenu(conversation) {
 				if (!conversation || this.activeConversationMenuId === conversation.id) this.activeConversationMenuId = ''
@@ -860,11 +956,14 @@
 
 				this.isHistoryLoading = !this.historyConversations.length
 				this.historyLoadError = ''
-				// 复用业务会话库查询；当前页面成功加载一次后不随 SDK 消息通知重复请求。
-				this._historyConversationLoadPromise = getAllHistoryConversations()
+				// PC 端按接口页码逐页读取，避免一次请求和渲染全部历史会话。
+				this._historyConversationLoadPromise = getHistoryConversationsPage(1)
 					.then(conversationList => {
 						if (!this._conversationPageAlive) return
 						this.historyConversations = conversationList
+						this.historyPage = conversationList.length ? 1 : 0
+						this.hasMoreHistoryConversations = conversationList.length > 0
+						this.historyLoadMoreError = ''
 						this._historyConversationsLoaded = true
 					})
 					.catch(error => {
@@ -883,11 +982,13 @@
 				return this.activeMainTab === 'history' ? this.loadHistoryConversations() : this.loadConversations()
 			},
 			getConversationAvatar(conversation) {
-				const avatar = conversation && conversation.avatar ? conversation.avatar : DEFAULT_AVATAR
-				return this.failedAvatarMap[conversation.id] === avatar ? DEFAULT_AVATAR : avatar
+			const avatar = conversation && conversation.avatar ? conversation.avatar : ''
+			const fallback = getTalentAvatar(conversation)
+			return !avatar || avatar === DEFAULT_AVATAR || this.failedAvatarMap[conversation.id] === avatar ? fallback : avatar
 			},
 			handleAvatarError(conversation) {
-				if (!conversation || !conversation.id || !conversation.avatar) return
+			if (!conversation || !conversation.id || !conversation.avatar ||
+				conversation.avatar === getTalentAvatar(conversation)) return
 				this.$set(this.failedAvatarMap, conversation.id, conversation.avatar)
 			},
 			cancelOpeningConversation() {
@@ -1679,6 +1780,27 @@
 			color: #f37324;
 			cursor: pointer;
 		}
+	}
+
+	.conversation-load-more,
+	.conversation-list-end {
+		box-sizing: border-box;
+		width: 100%;
+		height: 42px;
+		padding: 0;
+		font-size: 13px;
+		line-height: 42px;
+		text-align: center;
+		color: #a4a9ae;
+		background: transparent;
+		border: 0;
+	}
+
+	.conversation-load-more {
+		cursor: pointer;
+
+		&:hover:not(:disabled) { color: #f37324; }
+		&:disabled { cursor: wait; }
 	}
 
 	.pinned-corner {

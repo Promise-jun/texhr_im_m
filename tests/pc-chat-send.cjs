@@ -3,6 +3,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const maskPhoneNumbers = require('./mask-phone-helper.cjs')
 const source = fs.readFileSync(path.join(__dirname, '../components/pc-chat-panel/pc-chat-panel.vue'), 'utf8')
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/import[\s\S]*?from\s+['"][^'"]+['"]/g, '').replace('export default', 'module.exports =')
@@ -30,7 +31,7 @@ function environment(blocked = false) {
       sends.push({ message, conversationId }); order.push('send'); return send(message, conversationId)
     } }
   }
-  const context = vm.createContext({ module: { exports: {} }, NIM_EMOJIS: [],
+  const context = vm.createContext({ module: { exports: {} }, NIM_EMOJIS: [], maskPhoneNumbers,
     getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
     console: { warn: (...args) => warnings.push(args) },
     uni: { showToast: value => { toasts.push(value); order.push('toast') } } })
@@ -54,6 +55,12 @@ function environment(blocked = false) {
 }
 
 async function verify() {
+  const masked = environment()
+  masked.panel.draft = 'Call 13812345678 or 13987654321'
+  assert.equal(await masked.panel.sendMessage(), true)
+  assert.equal(masked.sends[0].message.text, 'Call 138****5678 or 139****4321')
+  await masked.panel.sendCommonPhrase({ key: 'phone', message: '+86 13812345678' })
+  assert.equal(masked.sends[1].message.text, '+86 138****5678')
   // 覆盖现有输入入口，以及统一入口对图片、语音、视频、位置、文件和自定义消息的处理。
   for (const kind of ['text', 'emoji', 'phrase', 1, 2, 3, 4, 6, 100]) {
     const env = environment(true), { panel } = env

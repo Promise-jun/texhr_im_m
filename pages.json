@@ -12,6 +12,7 @@
 			"style": {
 				"enablePullDownRefresh": false,
 				"backgroundColor": "white",
+				"navigationBarTitleText": "企业直聊",
 				"app-plus": {
 					"titleNView": false
 				}
@@ -23,6 +24,7 @@
 				"navigationStyle": "custom",
 				"enablePullDownRefresh": false,
 				"backgroundColor": "white",
+				"navigationBarTitleText": "企业直聊",
 				"app-plus": {
 					"titleNView": false
 				}
@@ -34,6 +36,7 @@
 				"navigationStyle": "custom",
 				"enablePullDownRefresh": false,
 				"backgroundColor": "white",
+				"navigationBarTitleText": "企业直聊",
 				"app-plus": {
 					"titleNView": false
 				}
@@ -45,6 +48,7 @@
 				"navigationStyle": "custom",
 				"enablePullDownRefresh": false,
 				"backgroundColor": "white",
+				"navigationBarTitleText": "企业直聊",
 				"app-plus": {
 					"titleNView": false
 				}

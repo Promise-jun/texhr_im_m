@@ -25,7 +25,7 @@
 				<view v-for="message in messages" :key="message.id" class="history-message">
 					<view v-if="message.time" class="time-divider">{{ message.time }}</view>
 					<view class="message-row" :class="[message.direction, { 'message-row--job-card': message.type === 'job-card' }]">
-						<image v-if="message.type !== 'job-card'" :src="failedAvatarIds.includes(message.id) ? defaultAvatar : message.avatar"
+						<image v-if="message.type !== 'job-card'" :src="failedAvatarIds.includes(message.id) ? (message.fallbackAvatar || defaultAvatar) : message.avatar"
 							class="message-avatar" mode="aspectFill" @error="handleAvatarError(message)"></image>
 						<view class="message-bubble" :class="{
 							'message-bubble--image': message.type === 'image',

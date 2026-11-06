@@ -180,13 +180,13 @@ function getAuthFromCookie(isEnterprise) {
 	// 判断是否包含 ehr（区分大小写，EHR 匹配不到）
 	if (url.includes('ehr')) {
 		return {
-			EnterpriseId: 198235,
-			Token: 'JzvKudVD-_DCRgQa2oYU',
+			EnterpriseId: 19441,
+			Token: 'QPs0y9XhmZcOPjoKWICo',
 		}
 	} else {
 		return {
-			PersonId: 248665,
-			Token: 'MU-UM3xfYI1ZtAXbpbi8',
+			PersonId: 210902,
+			Token: 'wez7hfAmuhCha8gvwrQP',
 		}
 	}
 

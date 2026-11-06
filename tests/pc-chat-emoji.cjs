@@ -3,6 +3,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const maskPhoneNumbers = require('./mask-phone-helper.cjs')
 const root = path.resolve(__dirname, '..')
 
 function helpers(file, names) {
@@ -27,7 +28,7 @@ function environment() {
         senderId: 'enterprise', isSelf: true, createTime: 1000 } }
     } }
   }
-  const context = vm.createContext({ ...emoji, ...audio, module: { exports: {} },
+  const context = vm.createContext({ ...emoji, ...audio, maskPhoneNumbers, module: { exports: {} },
     console: { log() {}, warn() {} }, uni: { showToast: value => toasts.push(value.title) },
     getNimInstance: () => nim, isNimLoggedIn: () => true, formatConversationTime: () => '10:20' })
   const script = panelSource.match(/<script>([\s\S]*?)<\/script>/)[1]

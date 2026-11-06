@@ -44,7 +44,7 @@
 					</view>
 					<view class="message-row">
 						<text v-if="conversation.readState" class="read-state">[{{ conversation.readState }}]</text>
-						<text class="message">{{ conversation.message }}</text>
+						<text class="message">{{ formatMessagePreview(conversation.message) }}</text>
 					</view>
 				</view>
 			</view>
@@ -170,6 +170,9 @@
 			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
 		},
 		methods: {
+			formatMessagePreview(message) {
+				return String(message === null || message === undefined ? '' : message).replace(/[\r\n]+/g, ' ')
+			},
 			getTouchPoint(event) {
 				const touch = event && ((event.touches && event.touches[0]) ||
 					(event.changedTouches && event.changedTouches[0]))
@@ -994,7 +997,10 @@
 						}
 
 						.message {
+							flex: 1;
 							min-width: 0;
+							width: 0;
+							display: block;
 							overflow: hidden;
 							font-size: 24rpx;
 							text-overflow: ellipsis;

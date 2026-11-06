@@ -1,5 +1,6 @@
 import { requestApi } from './request'
 import { parseNimEmojiText } from './nim-emoji'
+import { getTalentAvatar } from './talent-avatar'
 
 export const CHAT_GET_SINGLE_API = 'Chat.Chat.GetSingleChat'
 export const CHAT_GET_SESSION_CONTENT_API = 'Chat.Chat.GetSessionContent'
@@ -233,12 +234,15 @@ function formatHistoryTime(value) {
 export function normalizeHistoryMessage(row, index, perspective = 'person') {
 	if (!row || typeof row !== 'object' || Array.isArray(row)) return null
 	const messageType = Number(row.MsgType)
+	const isSelf = row.IsMySend === true || row.IsMySend === 1 || row.IsMySend === '1' || row.IsMySend === 'true'
+	const isTalent = perspective === 'enterprise' ? !isSelf : isSelf
+	const fallbackAvatar = isTalent ? getTalentAvatar(row) : DEFAULT_AVATAR
 	const base = {
 		id: `history-${index}`,
 		// IsMySend 决定左右布局，不能把字符串 "false" 直接转换为 true。
-		direction: row.IsMySend === true || row.IsMySend === 1 || row.IsMySend === '1' || row.IsMySend === 'true'
-			? 'self' : 'other',
-		avatar: accountId(row.Icon) || DEFAULT_AVATAR,
+		direction: isSelf ? 'self' : 'other',
+		avatar: accountId(row.Icon) || fallbackAvatar,
+		fallbackAvatar,
 		name: row.Name || '',
 		// 保留每条消息的时间，ISO 日期按 chat.vue 的规则转换为可读文案。
 		time: formatHistoryTime(row.ShowTime),

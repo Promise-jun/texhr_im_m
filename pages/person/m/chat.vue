@@ -287,6 +287,8 @@
 	import {
 		requestApi
 	} from '../../../services/request'
+	import { DEFAULT_TALENT_AVATAR, getTalentAvatar } from '../../../services/talent-avatar'
+	import { maskPhoneNumbers } from '../../../services/mask-phone'
 	import {
 		NIM_EVENT,
 		clearActiveConversationId,
@@ -341,8 +343,6 @@
 	const REVOKED_MESSAGE_TEXT = '你撤回了一条消息'
 	const MESSAGE_REEDIT_EXPIRED_MESSAGE = '发送时间超过5分钟的消息，不能重新编辑'
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
-	const MAN_AVATAR = '/static/man_avatar.png'
-	const WOMAN_AVATAR = '/static/woman_avatar.png'
 
 	const MESSAGE_TYPE_LABELS = Object.freeze({
 		2: '[语音]',
@@ -510,10 +510,7 @@
 	}
 
 	function getGenderAvatar(gender) {
-		// 云信用户资料约定：1 为男性、2 为女性，0 或未填写表示未知。
-		if (Number(gender) === 1) return MAN_AVATAR
-		if (Number(gender) === 2) return WOMAN_AVATAR
-		return DEFAULT_AVATAR
+		return getTalentAvatar(gender)
 	}
 
 	function getImageFileName(filePath) {
@@ -699,7 +696,7 @@
 				failedJobLogoIds: [],
 				conversationId: '',
 				selfUserInfo: null,
-				selfAvatar: DEFAULT_AVATAR,
+				selfAvatar: DEFAULT_TALENT_AVATAR,
 				otherUserInfo: null,
 				otherAvatar: DEFAULT_AVATAR,
 				actions: [{
@@ -949,7 +946,10 @@
 					})
 					if (!response || Number(response.Code) !== 0) {
 						const code = response && response.Code !== undefined ? response.Code : 'unknown'
-						throw new Error(`获取沟通状态失败，业务错误码：${code}`)
+						const errorMessage = response && typeof response.ErrorMessage === 'string' ?
+							response.ErrorMessage.trim() :
+							''
+						throw new Error(errorMessage || `获取沟通状态失败，业务错误码：${code}`)
 					}
 
 					const data = parseResponseData(response.Data, '沟通限制接口返回的数据格式不正确')
@@ -1105,7 +1105,7 @@
 						await this.mergeMessages([customResult.message])
 					}
 
-					const textMessage = messageCreator.createTextMessage(pendingGreeting.greetingText)
+					const textMessage = messageCreator.createTextMessage(maskPhoneNumbers(pendingGreeting.greetingText))
 					const textResult = await messageService.sendMessage(textMessage, this.conversationId)
 					if (!textResult || !textResult.message) throw new Error('默认招呼语文本发送失败：SDK 未返回消息')
 					await this.mergeMessages([textResult.message])
@@ -3424,7 +3424,7 @@
 				try {
 					await this.checkOtherBlockedBeforeSend()
 					const nim = getNimInstance()
-					const message = nim.V2NIMMessageCreator.createTextMessage(content)
+					const message = nim.V2NIMMessageCreator.createTextMessage(maskPhoneNumbers(content))
 					const result = await nim.V2NIMMessageService.sendMessage(message, this.conversationId)
 					if (!result || !result.message) throw new Error('消息发送失败：SDK 未返回消息')
 

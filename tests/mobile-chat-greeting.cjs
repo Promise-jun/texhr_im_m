@@ -2,9 +2,12 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const maskPhoneNumbers = require('./mask-phone-helper.cjs')
 
 const root = path.resolve(__dirname, '..')
 const source = fs.readFileSync(path.join(root, 'pages/person/m/chat.vue'), 'utf8')
+const avatarContext = vm.createContext({})
+vm.runInContext(fs.readFileSync(path.join(root, 'services/talent-avatar.js'), 'utf8').replace(/^export /gm, ''), avatarContext)
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/import[\s\S]*?from\s+['"][^'"]+['"]/g, '')
   .replace('export default', 'module.exports =')
@@ -38,6 +41,9 @@ async function verify() {
   }
   const globals = {
     module: { exports: {} },
+    maskPhoneNumbers,
+    DEFAULT_TALENT_AVATAR: avatarContext.getTalentAvatar(),
+    getTalentAvatar: avatarContext.getTalentAvatar,
     NIM_EVENT: { LOGIN_STATUS: 'login-status', LOGIN_FAILED: 'login-failed' },
     NIM_EMOJIS: [],
     clearActiveConversationId() {},
@@ -64,7 +70,7 @@ async function verify() {
         }
       }
       if (args.Name === 'Chat.ChatButton.Get') {
-        return { Code: 0, Data: { Greetings: '您好，方便聊聊这个职位吗？' } }
+        return { Code: 0, Data: { Greetings: '您好，方便聊聊这个职位吗？13812345678' } }
       }
       if (args.Name === 'Chat.Person.GetJobState') {
         return { Code: 0, Data: { State: args.Content.JobId === 'active-job' ? 1 : 2 } }
@@ -103,6 +109,12 @@ async function verify() {
   for (const [name, getter] of Object.entries(definition.computed)) {
     Object.defineProperty(page, name, { get: getter.bind(page) })
   }
+  assert.equal(page.selfAvatar, '/static/preson_avatar.png')
+  assert.equal(vm.runInContext('getGenderAvatar(1)', context), '/static/man_avatar.png')
+  assert.equal(vm.runInContext('getGenderAvatar(2)', context), '/static/woman_avatar.png')
+  page.selfUserInfo = { gender: 2 }
+  page.handleAvatarError('self')
+  assert.equal(page.selfAvatar, '/static/woman_avatar.png')
   page.jobId = 'job-7'
   page.resumeId = 'resume-3'
   page.prepareNimConversation = async () => { page.conversationId = 'p2p-enterprise-2' }
@@ -124,13 +136,22 @@ async function verify() {
     data: { JobName: '面料采购' }
   })
   assert.equal(sent[1].message.kind, 'text')
-  assert.equal(sent[1].message.text, '您好，方便聊聊这个职位吗？')
+  assert.equal(sent[1].message.text, '您好，方便聊聊这个职位吗？138****5678')
   assert.equal(sent[0].conversationId, 'p2p-enterprise-2')
   assert.equal(sent[1].conversationId, 'p2p-enterprise-2')
   assert.equal(page._pendingChatGreeting, null)
   assert.equal(page.displayMessages.find(message => message.id === 'sent-1').type, 'job-card')
   assert.equal(page.displayMessages.find(message => message.id === 'sent-1').direction, 'self')
   assert.equal(page.displayMessages.find(message => message.id === 'sent-2').type, 'text')
+
+  page.checkOtherBlockedBeforeSend = async () => {}
+  page.draft = '13812345678'
+  await page.sendMessage()
+  assert.equal(sent[sent.length - 1].message.text, '138****5678')
+  assert.equal(page.draft, '')
+  page.transcribedText = '13987654321'
+  await page.sendTranscribedText()
+  assert.equal(sent[sent.length - 1].message.text, '139****4321')
 
   page.messages = [{
     messageClientId: 'custom-4',

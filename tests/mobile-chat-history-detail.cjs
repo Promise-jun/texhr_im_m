@@ -107,6 +107,8 @@ function environment() {
   }
   const service = vm.createContext({ ...globals })
   vm.runInContext(source('services/nim-emoji.js').replace(/^export /gm, ''), service)
+  vm.runInContext(source('services/talent-avatar.js').replace(/^export /gm, ''), service)
+  globals.getTalentAvatar = service.getTalentAvatar
   vm.runInContext(source('services/chat-history.js').replace(/import[^\n]+\n/g, '').replace(/^export /gm, ''), service)
   globals.getHistoryChatDetail = service.getHistoryChatDetail
   globals.getHistoryChatMessages = service.getHistoryChatMessages
@@ -192,6 +194,12 @@ async function verifyService() {
   assert.equal(normalized[1].direction, 'other')
   assert.equal(normalized[2].direction, 'self')
   assert.equal(normalized[3].avatar, '/static/default_avatar.png')
+  assert.equal(normalized[2].fallbackAvatar, '/static/preson_avatar.png')
+  assert.equal(env.service.normalizeHistoryMessage({ MsgType: 1, IsMySend: true, Gender: '男' }, 0).avatar, '/static/man_avatar.png')
+  assert.equal(env.service.normalizeHistoryMessage({ MsgType: 1, IsMySend: true, SexName: 'female' }, 0).avatar, '/static/woman_avatar.png')
+  assert.equal(env.service.normalizeHistoryMessage({ MsgType: 1, IsMySend: false }, 0).avatar, '/static/default_avatar.png')
+  assert.equal(env.service.normalizeHistoryMessage({ MsgType: 1, IsMySend: false, Gender: 1 }, 0, 'enterprise').avatar,
+    '/static/man_avatar.png')
   assert.equal(normalized[4].url, 'image-2.png')
   assert.equal(normalized[5].durationSeconds, 3)
   assert.deepStrictEqual(plain(normalized[6].job), job)

@@ -14,7 +14,7 @@
 			:upper-threshold="60" @scroll="closeMessageContextMenu" @scrolltoupper="loadEarlierMessages(false)">
 			<view class="message-content">
 				<view v-if="messages.length" class="history-state" @click="loadEarlierMessages(false)">
-					{{ isLoadingHistory ? '正在加载聊天记录...' : historyExhausted ? '没有更多消息了' : '加载更多消息' }}
+					{{ isLoadingHistory ? '正在加载聊天记录...' : historyExhausted ? '' : '加载更多消息' }}
 				</view>
 				<view v-if="isCheckingAccess || (isLoadingHistory && !messages.length)" class="message-state">
 					正在加载聊天记录...
@@ -200,8 +200,10 @@
 	} from '../../services/nim'
 	import { markNimConversationRead, sendNimP2PReadReceipt, formatConversationTime } from '../../services/conversation'
 	import { requestApi } from '../../services/request'
+	import { getTalentAvatar } from '../../services/talent-avatar'
 	import { getAudioMimeType, audioDurationSeconds, audioBubbleWidth, createPcAudioPlayer } from '../../services/pc-chat-audio'
 	import { NIM_EMOJIS, parseNimEmojiText } from '../../services/nim-emoji'
+	import { maskPhoneNumbers } from '../../services/mask-phone'
 
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const HISTORY_PAGE_SIZE = 50
@@ -404,8 +406,11 @@
 				if (!this.blockStatusLoaded) return '重试查询'
 				return this.isOtherBlocked ? '取消屏蔽' : '屏蔽TA'
 			},
-			selfAvatar() { return this.profileAvatar(this.selfUser.avatar) },
-			otherAvatar() { return this.profileAvatar(this.otherUser.avatar || this.conversation.avatar) },
+			selfAvatar() { return this.profileAvatar(this.selfUser.avatar, DEFAULT_AVATAR) },
+			otherAvatar() {
+				const conversationAvatar = this.conversation.avatar === DEFAULT_AVATAR ? '' : this.conversation.avatar
+				return this.profileAvatar(this.otherUser.avatar || conversationAvatar, getTalentAvatar(this.otherUser))
+			},
 			displayMessages() {
 				const rows = []
 				let previousTime = 0
@@ -622,6 +627,8 @@
 					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
 						? window.open('https://www.texhr.cn/ehr/qualification/', '_blank') : null
 					if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
+				} else if (name === '知道了') {
+					this.navigateBack()
 				}
 			},
 			async requestChatUpgrade() {
@@ -709,7 +716,7 @@
 					}
 					// 自定义消息回执成功后再发送 Greetings 文本，发送期间切换会话时不再继续。
 					if (!this.isCurrentChatGreeting(greeting) || !this.canSendText || !isNimLoggedIn()) return
-					const sent = await this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(greeting.greetingText),
+					const sent = await this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(maskPhoneNumbers(greeting.greetingText)),
 						undefined, () => this.isCurrentChatGreeting(greeting))
 					if (sent) greeting.textSent = true
 				})().finally(() => { this._chatGreetingSendPromise = null })
@@ -781,10 +788,11 @@
 					console.warn('[PC Chat] 获取云信用户资料失败', error)
 				}
 			},
-			profileAvatar(url) { return !url || this.failedAvatars[url] ? DEFAULT_AVATAR : url },
+			profileAvatar(url, fallback) { return !url || this.failedAvatars[url] ? fallback : url },
 			handleAvatarError(direction) {
 				const url = direction === 'self' ? this.selfAvatar : this.otherAvatar
-				if (url !== DEFAULT_AVATAR) this.$set(this.failedAvatars, url, true)
+				const fallback = direction === 'self' ? DEFAULT_AVATAR : getTalentAvatar(this.otherUser)
+				if (url !== fallback) this.$set(this.failedAvatars, url, true)
 			},
 			mergeMessages(list) {
 				const map = new Map(this.messages.map(message => [messageId(message), message]))
@@ -1253,7 +1261,7 @@
 			async sendTextMessage(text, draftSnapshot) {
 				if (typeof text !== 'string' || !text.trim()) return false
 				// 文本、表情和常用语都交给统一发送入口，不单独绕过黑名单查询。
-				return this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(text.trim()), draftSnapshot)
+				return this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(maskPhoneNumbers(text.trim())), draftSnapshot)
 			},
 			async checkOtherBlockedBeforeSend(nim, personAccId) {
 				const conversationId = this.conversationId

@@ -84,7 +84,8 @@ async function enrichConversationsWithUserProfiles(conversationList, nim) {
 		return {
 			...conversation,
 			name: name || conversation.name,
-			avatar: avatar || conversation.avatar
+			avatar: avatar || conversation.avatar,
+			gender: user.gender !== undefined ? user.gender : conversation.gender
 		}
 	})
 }
@@ -219,6 +220,7 @@ export function normalizeHistoryConversation(session) {
 		type: 1,
 		name: session.Name || targetId,
 		avatar: session.Icon || DEFAULT_AVATAR,
+		gender: session.Gender !== undefined ? session.Gender : session.Sex,
 		message: session.LastMsg || '暂无消息',
 		// 接口已提供用于会话列表展示的 ShowTime，保持服务端格式，不再二次转换。
 		time: session.ShowTime || '',
@@ -230,11 +232,8 @@ export function normalizeHistoryConversation(session) {
 	}
 }
 
-/**
- * 一次获取 texhr 数据库中的所有会话，按 Accid 去重。
- * GetAllSessions 已返回全部会话，不再通过 start 追加分页请求。
- */
-export async function getAllHistoryConversations() {
+/** start 是接口定义的页码；未传时保留移动端原有的请求方式。 */
+async function getHistorySessions(start) {
 	if (!isNimLoggedIn()) throw new Error('网易云信尚未登录')
 
 	const loginService = getNimInstance().V2NIMLoginService
@@ -243,11 +242,16 @@ export async function getAllHistoryConversations() {
 		: ''
 	if (!accountId) throw new Error('获取历史会话失败：未获取到当前网易云账号')
 
+	const content = { accid: accountId }
+	if (start !== undefined) content.start = start
 	const response = await requestApi({
 		Name: NIM_GET_ALL_SESSIONS_API,
-		Content: { accid: accountId }
+		Content: content
 	})
-	const sessions = assertHistoryResponse(response)
+	return assertHistoryResponse(response)
+}
+
+function normalizeHistoryConversations(sessions) {
 	const conversationMap = new Map()
 	sessions.forEach(session => {
 		const conversation = normalizeHistoryConversation(session)
@@ -255,6 +259,22 @@ export async function getAllHistoryConversations() {
 	})
 
 	return Array.from(conversationMap.values())
+}
+
+/** 按接口文档中的 start 页码读取历史会话，页码从 1 开始。 */
+export async function getHistoryConversationsPage(page = 1) {
+	const pageNumber = Number(page)
+	if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+		throw new Error('获取历史会话失败：分页页码无效')
+	}
+	const sessions = await getHistorySessions(pageNumber)
+	return normalizeHistoryConversations(sessions)
+}
+
+/** 移动端保留原有不传 start 的历史会话请求方式。 */
+export async function getAllHistoryConversations() {
+	const sessions = await getHistorySessions()
+	return normalizeHistoryConversations(sessions)
 }
 
 /** 进入聊天页后清除该会话未读数，SDK 会再通过 onConversationChanged 回推最新会话。 */
@@ -387,6 +407,7 @@ export function normalizeConversation(conversation, now = Date.now()) {
 		type: Number(conversation && conversation.type) || 0,
 		name: conversation && conversation.name ? conversation.name : targetId || '未知会话',
 		avatar: conversation && conversation.avatar ? conversation.avatar : DEFAULT_AVATAR,
+		gender: conversation && conversation.gender !== undefined ? conversation.gender : conversation && conversation.sex,
 		message: getLastMessagePreview(
 			conversation && conversation.lastMessage,
 			Number(conversation && conversation.type)

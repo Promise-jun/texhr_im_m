@@ -29,6 +29,7 @@ const context = vm.createContext({
   uni: {},
   console: { log() {}, warn() {} }
 })
+vm.runInContext(fs.readFileSync(path.join(root, 'services/talent-avatar.js'), 'utf8').replace(/^export /gm, ''), context)
 vm.runInContext(script, context)
 
 const definition = context.module.exports
@@ -73,6 +74,14 @@ panel.messages = [{
     })
   }
 }]
+
+assert.equal(panel.otherAvatar, '/static/preson_avatar.png')
+panel.otherUser = { gender: 2 }
+assert.equal(panel.otherAvatar, '/static/woman_avatar.png')
+panel.otherUser = { gender: 1, avatar: '/broken-avatar.png' }
+assert.equal(panel.otherAvatar, '/broken-avatar.png')
+panel.handleAvatarError('other')
+assert.equal(panel.otherAvatar, '/static/man_avatar.png')
 
 const card = panel.displayMessages.find(message => message.id === 'person-card')
 assert.equal(card.type, 'person-card')
