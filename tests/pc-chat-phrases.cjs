@@ -91,11 +91,12 @@ async function verify() {
 
   const env = environment(), { panel } = env
   const rows = [
-    { Id: 'normal', Msg: '  您好，请介绍一下工作经历。  ', IsTop: false },
+    { Id: 'normal', Msg: '  您好，请介绍一下工作\n经历。  ', IsTop: false },
     { Id: 'top-a', Msg: '您好，方便沟通吗？', IsTop: true },
     null, { Id: 'blank', Msg: '  ' }, { Id: 'invalid', Msg: 123 },
     { Msg: '收到，谢谢。', IsTop: false },
-    { Id: 'top-b', Msg: '欢迎进一步沟通。[大笑]', IsTop: true }
+    { Id: 'top-b', Msg: '欢迎进一步沟通。[大笑]', IsTop: true },
+    { Id: 'escaped', Msg: '第一行\\n第二行', IsTop: false }
   ]
   env.request(async args => args.Name === 'Chat.MyChat.Limits'
     ? { Code: 0, Data: { JobName: '后端工程师' } } : { Code: 0, Data: { Rows: rows } })
@@ -106,8 +107,11 @@ async function verify() {
   assert.equal(env.calls[1].Name, 'Chat.CommonLanguage.Get')
   assert.equal(env.calls[1].Content, '')
   assert.equal(env.state.prepares, 1)
-  assert.equal(panel.commonPhrases.map(item => item.key).join(','), 'top-a,top-b,normal,phrase-5')
-  assert.equal(panel.commonPhrases[2].message, '您好，请介绍一下工作经历。')
+  assert.equal(panel.commonPhrases.map(item => item.key).join(','), 'top-a,top-b,normal,phrase-5,escaped')
+  assert.equal(panel.commonPhrases[2].message, '您好，请介绍一下工作\n经历。')
+  assert.equal(panel.commonPhrases[2].displayMessage, '您好，请介绍一下工作 经历。')
+  assert.equal(panel.commonPhrases[4].message, '第一行\\n第二行')
+  assert.equal(panel.commonPhrases[4].displayMessage, '第一行 第二行')
   assert.equal(panel.commonPhrasesLoaded, true)
   assert.equal(panel.isLoadingCommonPhrases, false)
   console.log('PASS: entering an allowed conversation loads Msg/Id/IsTop rows; blank content is filtered and pinned order is stable')
@@ -574,7 +578,7 @@ async function verify() {
   console.log('PASS: invalid responses and network errors show retry; retry recovers and destroyed conversations ignore pending responses')
 
   panel.phrasesVisible = true
-  const phrase = panel.commonPhrases[1]
+  const phrase = panel.commonPhrases[2]
   await panel.sendCommonPhrase(phrase)
   const phraseSend = env.sends.find(item => item.text === phrase.message)
   assert.equal(phraseSend.text, phrase.message)

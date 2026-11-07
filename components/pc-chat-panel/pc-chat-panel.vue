@@ -27,6 +27,11 @@
 				<template v-for="message in displayMessages">
 					<view v-if="message.type === 'time' || message.type === 'system'" :key="message.id"
 						class="time-divider">{{ message.content }}</view>
+					<view v-else-if="message.type === 'revoked'" :id="message.anchor" :key="message.id"
+						class="time-divider revoked-message">
+						<text>{{ message.content }}</text>
+						<text class="revoked-message-edit" @click.stop="reEditMessage(message)">重新编辑</text>
+					</view>
 					<view v-else :id="message.anchor" :key="message.id" class="message-row"
 						:class="[message.direction, { 'message-row--person-card': message.type === 'person-card' }]"
 						@contextmenu.prevent.stop="openMessageContextMenu($event, message)">
@@ -131,7 +136,7 @@
 						<!-- 只省略展示文字，发送时仍使用接口返回的完整常用语；与普通发送共用锁，防止重复发送。 -->
 						<button v-for="phrase in commonPhrases" :key="phrase.key" class="phrase-item" :title="phrase.message"
 							:aria-label="'发送常用语：' + phrase.message" :disabled="!canSendText" @click="sendCommonPhrase(phrase)">
-							<text class="phrase-message">{{ phrase.message }}</text>
+							<text class="phrase-message">{{ phrase.displayMessage }}</text>
 							<text v-if="sendingPhraseKey === phrase.key" class="phrase-sending">发送中...</text>
 						</button>
 					</block>
@@ -164,7 +169,7 @@
 		<view v-if="jobPickerVisible" class="job-picker-mask" @click="closeJobPicker">
 			<view class="job-picker" @click.stop>
 				<view class="job-picker-header">
-					<text class="job-picker-title">{{ jobList.length || isLoadingJobs || jobListError ? '点击选择沟通职位' : '暂无职位数据，马上发布发起聊天吧' }}</text>
+					<text class="job-picker-title">{{ jobList.length || isLoadingJobs || jobListError ? '点击选择沟通职位' : '请选择沟通职位' }}</text>
 					<button class="job-picker-close" aria-label="关闭职位列表" title="关闭" @click="closeJobPicker">×</button>
 				</view>
 				<view v-if="isLoadingJobs" class="job-picker-state">职位加载中...</view>
@@ -217,6 +222,8 @@
 	const TALENT_BLOCKED_SEND_MESSAGE = '该人才已屏蔽您的消息，暂不能发送消息'
 	const MESSAGE_REVOKE_EXPIRED_CODE = '107314'
 	const MESSAGE_REVOKE_EXPIRED_MESSAGE = '发送时间超过2分钟的消息，不能被撤回'
+	const MESSAGE_REEDIT_LIMIT = 5 * 60 * 1000
+	const MESSAGE_REEDIT_EXPIRED_MESSAGE = '发送时间超过5分钟的消息，不能重新编辑'
 	const REVOKED_MESSAGE_TEXT = '你撤回了一条消息'
 	const MESSAGE_LABELS = { 2: '[语音]', 3: '[视频]', 4: '[位置]', 6: '[文件]', 100: '[自定义消息]' }
 
@@ -440,7 +447,10 @@
 						id, anchor: this.messageAnchor(id),
 						direction: message.isSelf || message.senderId === this.enterpriseAccId ? 'self' : 'other',
 						// PC 端自定义 type=4 使用 Person 字段渲染人才信息卡片；type=5 使用居中系统提示。
-						type: revoked || type === 10 || Boolean(jobChangeContent) ? 'system' : person ? 'person-card' : type === 2 ? 'audio' : type === 1 && attachment.url ? 'image' : 'text',
+						type: revoked ? 'revoked' : type === 10 || Boolean(jobChangeContent) ? 'system' : person ? 'person-card' : type === 2 ? 'audio' : type === 1 && attachment.url ? 'image' : 'text',
+						timestamp,
+						originalText: revoked ? message.revokedText !== undefined ?
+							String(message.revokedText) : String(message.text || '') : '',
 						url: attachment.url || '',
 						durationSeconds, audioWidth: audioBubbleWidth(durationSeconds), mimeType: getAudioMimeType(attachment),
 						content, person,
@@ -906,12 +916,16 @@
 				const targetId = String(id)
 				return this.messages.find(item => messageId(item) === targetId) || null
 			},
+			isTextMessage(message) {
+				const rawMessage = this.findRawMessage(message) || message
+				return Boolean(rawMessage && Number(rawMessage.messageType) === 0)
+			},
 			openMessageContextMenu(event, message) {
-				// 只拦截自己的有效消息，收到的消息继续使用浏览器原生右键行为。
+				// 与手机端一致，只为自己的有效文本消息提供撤回入口。
 				const rawMessage = this.findRawMessage(message)
 				const isSelf = Boolean(rawMessage && (rawMessage.isSelf || rawMessage.senderId === this.enterpriseAccId))
 				if (!this._alive || !this.visible || this.opening || !this.accessReady || this.messageActionId ||
-					!isSelf || rawMessage.isRevoked) return
+					!isSelf || rawMessage.isRevoked || !this.isTextMessage(rawMessage)) return
 				if (event && typeof event.preventDefault === 'function') event.preventDefault()
 				if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
 				this.emojiVisible = false
@@ -934,6 +948,33 @@
 			closeMessageContextMenu() {
 				if (!this.messageContextMenu.visible) return
 				this.messageContextMenu = { visible: false, left: 0, top: 0, messageId: '' }
+			},
+			reEditMessage(message) {
+				const rawMessage = this.findRawMessage(message)
+				const messageTime = Number(message && message.timestamp) || Number(rawMessage && rawMessage.createTime) || 0
+				if (!messageTime || Date.now() - messageTime > MESSAGE_REEDIT_LIMIT) {
+					uni.showToast({ title: MESSAGE_REEDIT_EXPIRED_MESSAGE, icon: 'none' })
+					return
+				}
+
+				const originalText = message && message.originalText !== undefined ?
+					String(message.originalText) : rawMessage && rawMessage.revokedText !== undefined ?
+						String(rawMessage.revokedText) : String(rawMessage && rawMessage.text || '')
+				if (!originalText) {
+					uni.showToast({ title: '未获取到原消息内容', icon: 'none' })
+					return
+				}
+
+				this.draft = originalText
+				this.closeComposerPanels()
+				this.$nextTick(() => {
+					const input = this._inputRoot
+					if (input && typeof input.focus === 'function') input.focus()
+					else if (input && typeof input.querySelector === 'function') {
+						const textarea = input.querySelector('textarea')
+						if (textarea) textarea.focus()
+					}
+				})
 			},
 			confirmRevokeMessage() {
 				const rawMessage = this.findRawMessage(this.messageContextMenu.messageId)
@@ -965,7 +1006,7 @@
 				const id = messageId(rawMessage)
 				const conversationId = this.conversationId
 				const isSelf = rawMessage.isSelf || rawMessage.senderId === this.enterpriseAccId
-				if (!isSelf || rawMessage.isRevoked) return
+				if (!isSelf || rawMessage.isRevoked || !this.isTextMessage(rawMessage)) return
 				const messageService = getNimInstance().V2NIMMessageService
 				if (!messageService || typeof messageService.revokeMessage !== 'function') {
 					uni.showToast({ title: '当前聊天服务不支持撤回消息', icon: 'none' })
@@ -1230,6 +1271,7 @@
 						if (!message) return null
 						return { id: item.Id ? String(item.Id) : null,
 							key: item.Id ? String(item.Id) : `phrase-${index}`, message,
+							displayMessage: message.replace(/\s*(?:\\+[rn]|[\r\n\u2028\u2029])+\s*/g, ' '),
 							isTop: Boolean(item.IsTop), originalIndex: index }
 					}).filter(Boolean).sort((left, right) =>
 						left.isTop !== right.isTop ? (left.isTop ? -1 : 1) : left.originalIndex - right.originalIndex)
@@ -1465,6 +1507,8 @@
 	.message-state { padding: 22px 0; }
 	.message-state--error { color: #f37324; cursor: pointer; }
 	.time-divider { margin: 20px 0; }
+	.revoked-message { display: flex; align-items: center; justify-content: center; }
+	.revoked-message-edit { margin-left: 8px; color: #f37324; cursor: pointer; &:hover { text-decoration: underline; } }
 	.message-row { display: flex; align-items: flex-start; margin-bottom: 16px;
 		&.self { flex-direction: row-reverse;
 			.message-avatar { margin: 0 0 0 14px; }
@@ -1588,7 +1632,8 @@
 		&::after { border: 0; } &:hover { background: #fff6f0; }
 		&[disabled] { color: #a4abb4; background: #fff; cursor: default; }
 		&:focus-visible { outline: 2px solid #f37324; outline-offset: -2px; } }
-	.phrase-message { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.phrase-message { display: block; flex: 1; min-width: 0; max-width: 100%; overflow: hidden;
+		text-overflow: ellipsis; white-space: nowrap; }
 	.phrase-sending { flex-shrink: 0; margin-left: 12px; font-size: 12px; color: #f37324; }
 	.phrase-status { box-sizing: border-box; width: 100%; margin: 0; padding: 28px 16px; border: 0; border-radius: 0;
 		font-size: 13px; line-height: 22px; text-align: center; color: #9aa3ab; background: #fff;

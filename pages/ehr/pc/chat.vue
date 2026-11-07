@@ -325,6 +325,8 @@
 			this._conversationPageAlive = true
 			this._companyNameRequestId = 0
 			this._historyConversationsLoaded = false
+			this._historyConversationsRequested = false
+			this._historyConversationRequestId = 0
 			this._openConversationRequestId = 0
 			this._continueHistoryRequestId = 0
 			this._routeConversationPromise = null
@@ -348,7 +350,6 @@
 			this.currentTime = Date.now()
 			if (this.routePersonAccId) this.openRouteConversationAfterLoad()
 			else this.loadConversations()
-			this.loadHistoryConversations()
 		},
 		onHide() {
 			this.pageVisible = false
@@ -397,11 +398,12 @@
 				if (this._historyConversationLoadMorePromise) return this._historyConversationLoadMorePromise
 
 				const nextPage = this.historyPage + 1
+				const requestId = this._historyConversationRequestId
 				this.isHistoryLoadingMore = true
 				this.historyLoadMoreError = ''
 				this._historyConversationLoadMorePromise = getHistoryConversationsPage(nextPage)
 					.then(conversationList => {
-						if (!this._conversationPageAlive) return
+						if (!this._conversationPageAlive || requestId !== this._historyConversationRequestId) return
 						if (!conversationList.length) {
 							this.hasMoreHistoryConversations = false
 							return
@@ -420,13 +422,15 @@
 						this.hasMoreHistoryConversations = true
 					})
 					.catch(error => {
-						if (!this._conversationPageAlive) return
+						if (!this._conversationPageAlive || requestId !== this._historyConversationRequestId) return
 						console.error('[NIM] PC 端加载更多历史会话失败', error)
 						this.historyLoadMoreError = error && error.message ? error.message : '历史会话加载失败'
 					})
 					.finally(() => {
-						if (this._conversationPageAlive) this.isHistoryLoadingMore = false
-						this._historyConversationLoadMorePromise = null
+						if (requestId === this._historyConversationRequestId) {
+							if (this._conversationPageAlive) this.isHistoryLoadingMore = false
+							this._historyConversationLoadMorePromise = null
+						}
 					})
 
 				return this._historyConversationLoadMorePromise
@@ -629,13 +633,13 @@
 			handleLoginStatus(status) {
 				if (status !== 1) return
 				this.scheduleConversationReload()
-				this.loadHistoryConversations()
+				if (this._historyConversationsRequested) this.loadHistoryConversations()
 				// 已同步时可以直接打开；首次登录仍由会话同步完成事件触发。
 				this.openRouteConversationAfterLoad()
 			},
 			handleNimLoginFailed(error) {
 				this.handleConversationLoadFailed(error)
-				if (this._historyConversationsLoaded) return
+				if (!this._historyConversationsRequested || this._historyConversationsLoaded) return
 				this.isHistoryLoading = false
 				this.historyLoadError = error && (error.message || error.desc)
 					? error.message || error.desc
@@ -942,7 +946,7 @@
 				}
 			},
 			async loadHistoryConversations() {
-				if (!this._conversationPageAlive || this._historyConversationsLoaded) return
+				if (!this._conversationPageAlive || !this._historyConversationsRequested || this._historyConversationsLoaded) return
 				if (!isNimLoggedIn()) {
 					const loginError = getNimLoginError()
 					if (loginError) {
@@ -956,10 +960,11 @@
 
 				this.isHistoryLoading = !this.historyConversations.length
 				this.historyLoadError = ''
+				const requestId = this._historyConversationRequestId
 				// PC 端按接口页码逐页读取，避免一次请求和渲染全部历史会话。
 				this._historyConversationLoadPromise = getHistoryConversationsPage(1)
 					.then(conversationList => {
-						if (!this._conversationPageAlive) return
+						if (!this._conversationPageAlive || requestId !== this._historyConversationRequestId) return
 						this.historyConversations = conversationList
 						this.historyPage = conversationList.length ? 1 : 0
 						this.hasMoreHistoryConversations = conversationList.length > 0
@@ -967,19 +972,36 @@
 						this._historyConversationsLoaded = true
 					})
 					.catch(error => {
-						if (!this._conversationPageAlive) return
+						if (!this._conversationPageAlive || requestId !== this._historyConversationRequestId) return
 						console.error('[NIM] PC 端获取历史会话列表失败', error)
 						this.historyLoadError = error && error.message ? error.message : '历史会话加载失败'
 					})
 					.finally(() => {
-						if (this._conversationPageAlive) this.isHistoryLoading = false
-						this._historyConversationLoadPromise = null
+						if (requestId === this._historyConversationRequestId) {
+							if (this._conversationPageAlive) this.isHistoryLoading = false
+							this._historyConversationLoadPromise = null
+						}
 					})
 
 				return this._historyConversationLoadPromise
 			},
 			retryVisibleConversations() {
-				return this.activeMainTab === 'history' ? this.loadHistoryConversations() : this.loadConversations()
+				return this.activeMainTab === 'history' ? this.requestHistoryConversations() : this.loadConversations()
+			},
+			requestHistoryConversations() {
+				if (!this._conversationPageAlive) return
+				this._historyConversationsRequested = true
+				this._historyConversationsLoaded = false
+				this._historyConversationRequestId += 1
+				this._historyConversationLoadPromise = null
+				this._historyConversationLoadMorePromise = null
+				this.historyConversations = []
+				this.historyPage = 0
+				this.hasMoreHistoryConversations = false
+				this.isHistoryLoadingMore = false
+				this.historyLoadError = ''
+				this.historyLoadMoreError = ''
+				return this.loadHistoryConversations()
 			},
 			getConversationAvatar(conversation) {
 			const avatar = conversation && conversation.avatar ? conversation.avatar : ''
@@ -1067,11 +1089,15 @@
 				if (resolve) resolve(job)
 			},
 			switchMainTab(key) {
-				if (key === this.activeMainTab) return
+				if (key === this.activeMainTab) {
+					if (key === 'history') this.requestHistoryConversations()
+					return
+				}
 				this.closeConversationMenu()
 				this.cancelOpeningConversation()
 				this.cancelContinueHistory()
 				this.activeMainTab = key
+				if (key === 'history') this.requestHistoryConversations()
 			},
 			async selectConversation(conversation, options = {}) {
 				this.closeConversationMenu()
@@ -1610,7 +1636,7 @@
 
 		&:hover,
 		&.conversation-item--selected {
-			background: #fff8f3;
+			background: #fff1e8;
 		}
 
 		&.conversation-item--opening {

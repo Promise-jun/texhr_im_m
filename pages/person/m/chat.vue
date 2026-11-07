@@ -19,9 +19,11 @@
 			</view>
 		</view>
 
-		<scroll-view class="message-scroll" :class="{ 'message-scroll--panel': activePanel }"
-			:style="{ top: scrollTopStyle }" scroll-y :scroll-into-view="scrollIntoView"
-			:scroll-with-animation="scrollWithAnimation" :upper-threshold="80" @scrolltoupper="loadEarlierMessages"
+		<scroll-view ref="messageScroll" class="message-scroll" :class="{ 'message-scroll--panel': activePanel }"
+			:style="{ top: scrollTopStyle }" scroll-y :scroll-top="scrollTop" :scroll-into-view="scrollIntoView"
+			:scroll-with-animation="scrollWithAnimation" :refresher-enabled="messages.length > 0 && !historyExhausted"
+			:refresher-triggered="isRefreshingHistory" :refresher-threshold="60" refresher-background="#f3f6f8"
+			refresher-default-style="black" @scroll="handleMessageScroll" @refresherrefresh="handleHistoryRefresh"
 			@click="closePanel">
 			<view class="message-content">
 				<view class="load-status" :class="{ 'load-status--error': historyLoadError }" @click="retryChatLoad">
@@ -30,7 +32,7 @@
 					<text v-else-if="isLoadingHistory">正在加载更早消息...</text>
 					<text v-else-if="historyLoadError">{{ historyLoadError }}，点击重试</text>
 					<text v-else-if="historyExhausted && messages.length">没有更早的消息了</text>
-					<text v-else-if="messages.length">下滑加载更多消息</text>
+					<text v-else-if="messages.length">下拉加载更多消息</text>
 				</view>
 
 				<view v-if="!isChatLoading && !historyLoadError && !displayMessages.length" class="empty-state">
@@ -320,7 +322,7 @@
 	const COMMON_LANGUAGE_GET_API = 'Chat.CommonLanguage.Get'
 	const COMMON_LANGUAGE_SAVE_API = 'Chat.CommonLanguage.Save'
 	const COMMON_LANGUAGE_DELETE_API = 'Chat.CommonLanguage.Del'
-	const HISTORY_PAGE_SIZE = 50
+	const HISTORY_PAGE_SIZE = 30
 	const TIME_DIVIDER_INTERVAL = 5 * 60 * 1000
 	// 云信图片消息的业务上限：超过 25 MB 时不进入压缩和上传流程。
 	const MAX_IMAGE_SIZE = 25 * 1024 * 1024
@@ -744,8 +746,10 @@
 				audioPlayingId: '',
 				statusBarHeight: 0,
 				activePanel: '',
+				scrollTop: 0,
 				scrollIntoView: '',
 				scrollWithAnimation: false,
+				isRefreshingHistory: false,
 				isCheckingLimits: false,
 				isSwitchingChatJob: false,
 				isWaitingForNim: false,
@@ -1445,12 +1449,16 @@
 					return timeDiff || getMessageId(left).localeCompare(getMessageId(right))
 				})
 			},
-			mergeMessages(messageList) {
+			mergeMessages(messageList, beforeCommit) {
 				const resolvedMessages = this.addJobStatusesBeforeRender(messageList)
-				if (resolvedMessages && typeof resolvedMessages.then === 'function') {
-					return resolvedMessages.then(messages => this.commitMessages(messages))
+				const commit = messages => {
+					if (typeof beforeCommit === 'function') beforeCommit()
+					return this.commitMessages(messages)
 				}
-				return this.commitMessages(resolvedMessages)
+				if (resolvedMessages && typeof resolvedMessages.then === 'function') {
+					return resolvedMessages.then(commit)
+				}
+				return commit(resolvedMessages)
 			},
 			async loadCommonPhrases() {
 				if (this.isLoadingCommonPhrases) return
@@ -1685,12 +1693,12 @@
 			},
 			navigateByStep(stepName) {
 				const normalizedStepName = String(stepName || '').trim()
-				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '立即验证']
+				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '立即验证', '立即更新']
 				if (resumeStepNames.includes(normalizedStepName)) {
 					this.openMobileSiteUrl('https://m.texhr.cn/person/standardresume/myresume/')
 					return
 				}
-				if (normalizedStepName === '解除') {
+				if (normalizedStepName === '立即解除') {
 					this.openMobileSiteUrl('https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
 					return
 				}
@@ -2116,7 +2124,6 @@
 				this.isLoadingHistory = true
 				this.historyLoadError = ''
 				const oldestMessage = this.messages[0] || null
-				const anchorId = oldestMessage ? this.messageAnchor(getMessageId(oldestMessage)) : ''
 				try {
 					// direction=0 表示按时间倒序向前查询，anchorMessage 不会被重复返回。
 					const messageList = await getNimInstance().V2NIMMessageService.getMessageList({
@@ -2126,23 +2133,124 @@
 						direction: 0
 					})
 					const historyMessages = Array.isArray(messageList) ? messageList : []
-					await this.mergeMessages(historyMessages)
+					const contentHeightBefore = initialLoad ? null : await this.getMessageContentHeight()
+					const getCurrentScrollTop = () => {
+						const observed = Number(this._messageScrollPosition)
+						return Math.max(0, Number.isFinite(observed) ? observed : Number(this.scrollTop) || 0)
+					}
+					let scrollTopBefore = getCurrentScrollTop()
+					await this.mergeMessages(historyMessages, initialLoad ? undefined : () => {
+						scrollTopBefore = getCurrentScrollTop()
+					})
 					this.historyExhausted = historyMessages.length < HISTORY_PAGE_SIZE
 
-					this.$nextTick(() => {
-						if (initialLoad) {
+					if (initialLoad) {
+						this.$nextTick(() => {
 							this.scrollToBottom(false)
 							setTimeout(() => this.scrollToBottom(false), 60)
-						} else if (anchorId) {
-							this.scrollToAnchor(anchorId, false)
-						}
-					})
+						})
+					} else {
+						await new Promise(resolve => this.$nextTick(resolve))
+						const contentHeightAfter = await this.getMessageContentHeight()
+						const heightDelta = contentHeightBefore !== null && contentHeightAfter !== null ?
+							contentHeightAfter - contentHeightBefore : 0
+						this.scrollIntoView = ''
+						this.scrollWithAnimation = false
+						this.setMessageScrollTop(scrollTopBefore + heightDelta)
+					}
 				} catch (error) {
 					if (!this._chatPageAlive) return
 					this.historyLoadError = error && error.message ? error.message : '历史消息加载失败'
 					console.error('[Chat] 获取网易云历史消息失败', error)
 				} finally {
 					if (this._chatPageAlive) this.isLoadingHistory = false
+				}
+			},
+			getMessageContentHeight() {
+				return new Promise(resolve => {
+					let settled = false
+					let fallbackTimer = null
+					const finish = height => {
+						if (settled) return
+						settled = true
+						if (fallbackTimer) clearTimeout(fallbackTimer)
+						if (height === undefined || height === null) {
+							resolve(null)
+							return
+						}
+						const value = Number(height)
+						resolve(Number.isFinite(value) && value >= 0 ? value : null)
+					}
+					const readDomHeight = () => {
+						const ref = this.$refs && this.$refs.messageScroll
+						const root = ref && (ref.$el || ref)
+						const content = root && typeof root.querySelector === 'function' ?
+							root.querySelector('.message-content') : null
+						if (!content) return null
+						const scrollHeight = Number(content.scrollHeight)
+						if (Number.isFinite(scrollHeight) && scrollHeight > 0) return scrollHeight
+						const rectHeight = content.getBoundingClientRect && content.getBoundingClientRect().height
+						const height = Number(rectHeight)
+						return Number.isFinite(height) && height >= 0 ? height : null
+					}
+					const domHeight = readDomHeight()
+					if (domHeight !== null) {
+						finish(domHeight)
+						return
+					}
+					if (typeof uni.createSelectorQuery !== 'function') {
+						finish(null)
+						return
+					}
+					try {
+						let query = uni.createSelectorQuery()
+						if (typeof query.in === 'function') query = query.in(this) || query
+						const selector = query.select('.message-content')
+						if (!selector || typeof selector.boundingClientRect !== 'function' || typeof query.exec !== 'function') {
+							finish(null)
+							return
+						}
+						fallbackTimer = setTimeout(() => finish(readDomHeight()), 120)
+						selector.boundingClientRect(rect => {
+							if (rect && rect.height !== undefined) finish(rect.height)
+							else finish(readDomHeight())
+						})
+						query.exec()
+					} catch (error) {
+						finish(readDomHeight())
+					}
+				})
+			},
+			handleMessageScroll(event) {
+				const scrollTop = Number(event && event.detail && event.detail.scrollTop)
+				if (!Number.isFinite(scrollTop)) return
+				this._messageScrollPosition = Math.max(0, scrollTop)
+			},
+			setMessageScrollTop(value) {
+				const target = Math.max(0, Number(value) || 0)
+				const command = Number(this.scrollTop)
+				if (!Number.isFinite(command) || Math.abs(command - target) > 0.5) {
+					this.scrollTop = target
+					return
+				}
+				const observed = Number(this._messageScrollPosition)
+				if (!Number.isFinite(observed) || Math.abs(observed - target) <= 0.5) return
+				this.scrollTop = Math.max(0, observed)
+				this.$nextTick(() => {
+					if (this._chatPageAlive !== false) this.scrollTop = target
+				})
+			},
+			async handleHistoryRefresh() {
+				if (this.isRefreshingHistory || this.isLoadingHistory) return
+				if (this.historyExhausted || !this.conversationId) {
+					this.isRefreshingHistory = false
+					return
+				}
+				this.isRefreshingHistory = true
+				try {
+					await this.loadEarlierMessages()
+				} finally {
+					if (this._chatPageAlive !== false) this.isRefreshingHistory = false
 				}
 			},
 			retryChatLoad() {
@@ -2161,7 +2269,13 @@
 				this.scrollWithAnimation = Boolean(animated)
 				this.scrollIntoView = ''
 				this.$nextTick(() => {
+					if (!anchorId || this._chatPageAlive === false) return
 					this.scrollIntoView = anchorId
+					this.$nextTick(() => {
+						if (this._chatPageAlive !== false && this.scrollIntoView === anchorId) {
+							this.scrollIntoView = ''
+						}
+					})
 				})
 			},
 			scrollToBottom(animated = true) {

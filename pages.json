@@ -23,6 +23,7 @@
 			"style": {
 				"navigationStyle": "custom",
 				"enablePullDownRefresh": false,
+				"disableScroll": true,
 				"backgroundColor": "white",
 				"navigationBarTitleText": "企业直聊",
 				"app-plus": {

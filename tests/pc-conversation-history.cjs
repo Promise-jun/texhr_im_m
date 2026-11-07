@@ -72,18 +72,19 @@ function environment() {
 }
 
 async function verify() {
-  // 进入默认的最近页签也预加载历史列表，并使用企业云信账号。
+  // 进入默认的最近页签不请求历史；点击历史页签后使用企业云信账号加载。
   const env = environment()
   let resolveRequest
   env.request(() => new Promise(resolve => { resolveRequest = resolve }))
   env.enter()
   env.emit('LOGIN_STATUS', 1)
   env.enter()
+  assert.equal(env.calls.length, 0)
+  env.page.switchMainTab('history')
   assert.equal(env.calls.length, 1)
   assert.deepStrictEqual(JSON.parse(JSON.stringify(env.calls[0])), {
     Name: 'Chat.Chat.GetAllSessions', Content: { accid: 'enterprise-1', start: 1 }
   })
-  env.page.switchMainTab('history')
   assert.equal(env.page.visibleIsLoading, true)
   resolveRequest({ Code: 0, Data: JSON.stringify({ Code: 0, Sessions: sessions }) })
   await env.page.loadHistoryConversations()
@@ -123,8 +124,9 @@ async function verify() {
     Data: { Sessions: Content.start === 1 ? firstPage : Content.start === 2 ? secondPage : [] }
   }))
   paged.enter()
-  await paged.page.loadHistoryConversations()
+  assert.equal(paged.calls.length, 0)
   paged.page.switchMainTab('history')
+  await paged.page.loadHistoryConversations()
   assert.equal(paged.page.visibleConversations.length, 2)
   paged.page.$refs = { conversationList: { clientHeight: 300, scrollHeight: 800 } }
   await paged.page.handleConversationListScroll({ currentTarget: {}, detail: { scrollTop: 476 } })
@@ -165,8 +167,8 @@ async function verify() {
       return response
     })
     failed.enter()
-    await failed.page.loadHistoryConversations()
     failed.page.switchMainTab('history')
+    await failed.page.loadHistoryConversations()
     assert.ok(failed.page.visibleLoadError)
     assert.equal(failed.page.visibleIsLoading, false)
     failed.request(async () => ({ Code: 0, Data: { Sessions: [] } }))
@@ -181,12 +183,42 @@ async function verify() {
     failed.unload()
   }
 
+  // 每次点击都刷新第一页；较早的第一页和分页响应不能覆盖最新结果。
+  const refresh = environment()
+  const pendingRequests = []
+  refresh.request(({ Content }) => new Promise(resolve => pendingRequests.push({ start: Content.start, resolve })))
+  refresh.enter()
+  refresh.page.switchMainTab('history')
+  const firstRequest = refresh.page.loadHistoryConversations()
+  refresh.page.switchMainTab('history')
+  const secondRequest = refresh.page.loadHistoryConversations()
+  assert.deepStrictEqual(pendingRequests.map(item => item.start), [1, 1])
+  pendingRequests[1].resolve({ Code: 0, Data: { Sessions: [{ Accid: 'new' }] } })
+  await secondRequest
+  pendingRequests[0].resolve({ Code: 0, Data: { Sessions: [{ Accid: 'old' }] } })
+  await firstRequest
+  assert.equal(refresh.page.historyConversations[0].targetId, 'new')
+  const oldPage = refresh.page.loadMoreHistoryConversations()
+  refresh.page.switchMainTab('recent')
+  refresh.page.switchMainTab('history')
+  const thirdRequest = refresh.page.loadHistoryConversations()
+  assert.deepStrictEqual(pendingRequests.map(item => item.start), [1, 1, 2, 1])
+  pendingRequests[3].resolve({ Code: 0, Data: { Sessions: [{ Accid: 'latest' }] } })
+  await thirdRequest
+  pendingRequests[2].resolve({ Code: 0, Data: { Sessions: [{ Accid: 'stale-page' }] } })
+  await oldPage
+  assert.equal(refresh.page.historyConversations.length, 1)
+  assert.equal(refresh.page.historyConversations[0].targetId, 'latest')
+  assert.equal(refresh.page.historyPage, 1)
+  refresh.unload()
+
   // 卸载时解绑事件，并忽略在途响应。
   const unloaded = environment()
   let resolveUnloaded
   unloaded.request(() => new Promise(resolve => { resolveUnloaded = resolve }))
   unloaded.enter()
-  const pending = unloaded.page.loadHistoryConversations()
+  assert.equal(unloaded.calls.length, 0)
+  const pending = unloaded.page.requestHistoryConversations()
   unloaded.unload()
   resolveUnloaded({ Code: 0, Data: { Sessions: sessions } })
   await pending

@@ -181,12 +181,12 @@ function getAuthFromCookie(isEnterprise) {
 	if (url.includes('ehr')) {
 		return {
 			EnterpriseId: 19441,
-			Token: 'QPs0y9XhmZcOPjoKWICo',
+			Token: 'YwwUY3ERqZ5bdIfZxKWl',
 		}
 	} else {
 		return {
 			PersonId: 210902,
-			Token: 'wez7hfAmuhCha8gvwrQP',
+			Token: 'zMGEJKv82c9gzo1tGXF2',
 		}
 	}
 

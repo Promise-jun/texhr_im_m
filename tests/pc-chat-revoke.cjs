@@ -82,26 +82,36 @@ async function flush() {
 }
 
 async function verify() {
-  // 模板事件修饰符会在业务判断前阻止浏览器原生右键菜单。
+  // 消息行始终阻止浏览器原生右键菜单，自定义撤回菜单再由业务判断决定是否打开。
   assert.match(panelSource, /@contextmenu\.prevent\.stop="openMessageContextMenu\(\$event, message\)"/)
   assert.match(panelSource, /@scroll="closeMessageContextMenu"/)
   assert.match(panelSource, /PC 端仅为自己发送、尚未撤回的消息显示右键菜单/)
+  assert.match(panelSource, /MESSAGE_REEDIT_LIMIT = 5 \* 60 \* 1000/)
 
   const env = createEnvironment()
   const ownMessage = {
     conversationId: 'conversation-a', messageClientId: 'own-1', senderId: 'enterprise',
-    isSelf: true, createTime: 100, messageType: 0, text: '待撤回消息'
+    isSelf: true, createTime: Date.now(), messageType: 0, text: '待撤回消息'
+  }
+  const ownImageMessage = {
+    conversationId: 'conversation-a', messageClientId: 'own-image', senderId: 'enterprise',
+    isSelf: true, createTime: Date.now(), messageType: 1, text: '图片'
   }
   const otherMessage = {
     conversationId: 'conversation-a', messageClientId: 'other-1', senderId: 'person',
     isSelf: false, createTime: 101, messageType: 0, text: '收到的消息'
   }
-  env.panel.messages = [ownMessage, otherMessage]
+  env.panel.messages = [ownMessage, ownImageMessage, otherMessage]
 
   const otherEvent = contextEvent(20, 30)
   env.panel.openMessageContextMenu(otherEvent, { id: 'other-1', direction: 'other' })
   assert.equal(env.panel.messageContextMenu.visible, false)
   assert.deepEqual(otherEvent.state, { prevented: 0, stopped: 0 })
+
+  const imageEvent = contextEvent(30, 40)
+  env.panel.openMessageContextMenu(imageEvent, { id: 'own-image', direction: 'self' })
+  assert.equal(env.panel.messageContextMenu.visible, false)
+  assert.deepEqual(imageEvent.state, { prevented: 0, stopped: 0 })
 
   const ownEvent = contextEvent(790, 590)
   env.panel.openMessageContextMenu(ownEvent, { id: 'own-1', direction: 'self' })
@@ -129,10 +139,20 @@ async function verify() {
   assert.equal(env.panel.messageActionId, '')
   assert.equal(env.panel.messages[0].isRevoked, true)
   assert.equal(env.panel.messages[0].revokedText, '待撤回消息')
-  assert.equal(env.panel.displayMessages.find(item => item.id === 'own-1').content, '你撤回了一条消息')
+  const revokedRow = env.panel.displayMessages.find(item => item.id === 'own-1')
+  assert.equal(revokedRow.type, 'revoked')
+  assert.equal(revokedRow.content, '你撤回了一条消息')
+  assert.equal(revokedRow.originalText, '待撤回消息')
+  env.panel._inputRoot = { focusCount: 0, focus() { this.focusCount++ } }
+  env.panel.draft = '现有草稿'
+  env.panel.emojiVisible = true
+  env.panel.reEditMessage(revokedRow)
+  assert.equal(env.panel.draft, '待撤回消息')
+  assert.equal(env.panel.emojiVisible, false)
+  assert.equal(env.panel._inputRoot.focusCount, 1)
   assert.equal(env.toasts[0], '消息已撤回')
   assert.equal(env.events[0].event, 'changed')
-  console.log('PASS: only self messages open the clamped PC context menu; confirmation calls SDK once and updates the message locally')
+  console.log('PASS: only own text messages open the clamped PC context menu; recall stores the text and re-edit restores it to the focused composer')
 
   const cancelled = createEnvironment()
   cancelled.panel.messages = [ownMessage]
@@ -153,6 +173,15 @@ async function verify() {
   assert.equal(expired.panel.messages[0].isRevoked, undefined)
   assert.equal(expired.toasts[0], '发送时间超过2分钟的消息，不能被撤回')
   assert.equal(expired.panel.messageActionId, '')
+
+  const expiredReedit = createEnvironment()
+  expiredReedit.panel.messages = [{ ...ownMessage, isRevoked: true, revokedText: '过期消息',
+    createTime: Date.now() - 6 * 60 * 1000 }]
+  const expiredRow = expiredReedit.panel.displayMessages.find(item => item.type === 'revoked')
+  expiredReedit.panel.draft = '保留当前草稿'
+  expiredReedit.panel.reEditMessage(expiredRow)
+  assert.equal(expiredReedit.panel.draft, '保留当前草稿')
+  assert.equal(expiredReedit.toasts[0], '发送时间超过5分钟的消息，不能重新编辑')
 
   const unsupported = createEnvironment()
   unsupported.panel.messages = [ownMessage]
