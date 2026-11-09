@@ -53,6 +53,7 @@ function environment() {
       }
     }),
     normalizeAndSortConversations: rows => rows,
+    getTalentAvatar: () => '/static/default_avatar.png',
     requestApi: args => { calls.push(plain(args)); return request(args) },
     parseNimEmojiText: content => [{ type: 'text', content }],
     audioBubbleWidth: seconds => `${120 + seconds}px`, getAudioMimeType: message => message.mimeType || '',
@@ -181,7 +182,10 @@ async function verifyFlow() {
   assert.deepStrictEqual(env.calls[3], { Name: 'Chat.ChatButton.Get', Content: { JobId: 'job-a', ResumeId: 'resume a' } })
   assert.equal(env.sentMessages[0].message.text, '好久没互动了，我对你简历很感兴趣，快来聊聊~')
   assert.equal(env.sentMessages[0].conversationId, 'p2p-a')
-  assert.equal(env.calls.length, 4) // 浏览记录不触发权限、已读或发送接口。
+  assert.deepStrictEqual(env.calls[4], {
+    Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-a', ResumeId: 'resume a' }
+  })
+  assert.equal(env.calls.length, 5)
   env.panelDef.beforeDestroy.call(panel)
 }
 
@@ -331,7 +335,28 @@ async function verifyContinueJobSwitch() {
   assert.equal(env.page.chatDetail.skipGreeting, true)
 }
 
+async function verifyContinueSuccessStep() {
+  const env = environment()
+  env.page.historyChatDetail = {
+    conversationId: 'p2p-a', conversation: conversation('a'), jobId: 'job-1', resumeId: 'resume-1',
+    personAccId: 'a', enterpriseAccId: 'enterprise'
+  }
+  env.request(async args => args.Name === 'Chat.Person.GetJobState'
+    ? { Code: 0, Data: { State: 1 } }
+    : args.Name === 'Chat.ChatButton.Get'
+      ? { Code: 0, Data: { JobId: 'job-1' } }
+      : args.Name === 'Chat.MyChat.Limits'
+        ? { Code: 0, Data: { SuccessStep: { Tips: '请先升级', StepName: '立即升级' } } }
+        : { Code: 0, Data: {} })
+  await env.page.continueHistoryChat()
+  assert.equal(env.sentMessages.length, 0)
+  assert.equal(env.page.activeMainTab, 'recent')
+  assert.deepStrictEqual(env.page.chatDetail.initialAccess.Data.SuccessStep, {
+    Tips: '请先升级', StepName: '立即升级'
+  })
+}
+
 Promise.resolve().then(verifyFlow).then(verifyFailuresAndRaces).then(verifyContinueJobState)
-  .then(verifyContinueJobSwitch).then(() => {
+  .then(verifyContinueJobSwitch).then(verifyContinueSuccessStep).then(() => {
   console.log('pc chat history detail tests passed')
 }).catch(error => { console.error(error); process.exitCode = 1 })

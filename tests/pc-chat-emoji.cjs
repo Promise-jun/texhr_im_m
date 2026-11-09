@@ -30,12 +30,14 @@ function environment() {
   }
   const context = vm.createContext({ ...emoji, ...audio, maskPhoneNumbers, module: { exports: {} },
     console: { log() {}, warn() {} }, uni: { showToast: value => toasts.push(value.title) },
+    requestApi: async () => ({ Code: 0, Data: {} }),
     getNimInstance: () => nim, isNimLoggedIn: () => true, formatConversationTime: () => '10:20' })
   const script = panelSource.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/import[\s\S]*?from\s+['"][^'"]+['"]/g, '').replace('export default', 'module.exports =')
   vm.runInContext(script, context)
   const def = context.module.exports
   const panel = { conversation: { name: '模拟会话', stickTop: false }, detail: { conversationId: 'a' },
+    jobId: 'job-a', resumeId: 'resume-a',
     enterpriseAccId: 'enterprise', personAccId: 'a', drafts: {}, visible: true, opening: false,
     _alive: true, $refs: {}, $set: (object, key, value) => { object[key] = value },
     $emit() {}, $nextTick: fn => Promise.resolve().then(fn) }

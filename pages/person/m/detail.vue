@@ -113,6 +113,7 @@
 </template>
 
 <script>
+	import { requestApi } from '../../../services/request'
 	import { NIM_EVENT, getNimInstance, getNimLoginError, isNimLoggedIn } from '../../../services/nim'
 	import {
 		getHistoryChatDetail, getHistoryChatMessages, getHistoryChatJobState,
@@ -330,8 +331,8 @@
 						if (!this._detailPageAlive) return
 						pending.enterprise = enterprise
 					}
-					await this.sendContinueChatMessages(pending)
-					if (!this._detailPageAlive) return
+					const sent = await this.sendContinueChatMessages(pending)
+					if (!sent || !this._detailPageAlive) return
 					await this.openContinuedChat(pending)
 				} catch (error) {
 					if (!this._detailPageAlive) return
@@ -417,28 +418,62 @@
 					typeof service.sendMessage !== 'function') throw new Error('当前聊天服务不支持发送消息')
 				return { creator, service, conversationId: nim.V2NIMConversationIdUtil.p2pConversationId(enterpriseAccId) }
 			},
+			async checkContinueChatLimits(pending) {
+				const response = await requestApi({
+					Name: 'Chat.MyChat.Limits',
+					Content: { JobId: pending.jobId, ResumeId: pending.resumeId }
+				})
+				if (!this._detailPageAlive) return false
+				if (!response || Number(response.Code) !== 0) {
+					const code = response && response.Code !== undefined ? response.Code : 'unknown'
+					throw new Error(`获取沟通状态失败，业务错误码：${code}`)
+				}
+				let data = response.Data
+				if (data === undefined || data === null || data === '') data = {}
+				else if (typeof data === 'string') {
+					try { data = JSON.parse(data) } catch (error) { throw new Error('沟通限制接口返回的数据格式不正确') }
+				}
+				if (!data || typeof data !== 'object' || Array.isArray(data)) {
+					throw new Error('沟通限制接口返回的数据格式不正确')
+				}
+				if (data.Code !== undefined && Number(data.Code) !== 0) {
+					throw new Error(`获取沟通状态失败，数据错误码：${data.Code}`)
+				}
+				const successStep = data.SuccessStep || response.SuccessStep
+				if (successStep) {
+					// 聊天页继续执行个人端现有的 SuccessStep 弹窗与操作。
+					await this.openContinuedChat(pending, successStep)
+					return false
+				}
+				return true
+			},
 			async sendContinueChatMessages(pending) {
 				const { creator, service, conversationId } = this.getContinueMessageContext(pending.enterpriseAccId)
 				// 切换成功先发送 type=5 卡片；逐条等待 SDK 回执，失败重试不重发已成功的消息。
 				if (pending.enterprise && !pending.customSent) {
+					if (!await this.checkContinueChatLimits(pending)) return false
 					const message = creator.createCustomMessage('', JSON.stringify({ type: 5, data: pending.enterprise }))
 					const result = await service.sendMessage(message, conversationId)
 					if (!result || !result.message) throw new Error('职位变更消息发送失败')
 					pending.customSent = true
-					if (!this._detailPageAlive) return
+					if (!this._detailPageAlive) return false
 				}
 				if (!pending.textSent) {
+					if (!await this.checkContinueChatLimits(pending)) return false
 					const result = await service.sendMessage(creator.createTextMessage(CONTINUE_CHAT_TEXT), conversationId)
 					if (!result || !result.message) throw new Error('求职消息发送失败')
 					pending.textSent = true
 				}
+				return true
 			},
-			openContinuedChat(pending) {
+			openContinuedChat(pending, successStep) {
 				return new Promise((resolve, reject) => {
-					// 已在详情页完成消息发送，聊天页只加载会话，跳过初始化默认招呼语。
+					// 历史详情已完成权限校验，聊天页跳过默认招呼语；必要时接收原始 SuccessStep。
+					const successStepQuery = successStep
+						? `&successStep=${encodeURIComponent(JSON.stringify(successStep))}` : ''
 					uni.navigateTo({
 						url: appendExternalReturnUrl(
-							`/pages/person/m/chat?jobId=${encodeURIComponent(pending.jobId)}&resumeId=${encodeURIComponent(pending.resumeId)}&skipGreeting=1`,
+							`/pages/person/m/chat?jobId=${encodeURIComponent(pending.jobId)}&resumeId=${encodeURIComponent(pending.resumeId)}&skipGreeting=1${successStepQuery}`,
 							this.externalReturnUrl
 						),
 						success: () => {

@@ -8,7 +8,7 @@
 				<text class="navigation-title">聊天详情</text>
 			</view>
 
-			<view class="action-menu">
+			<view v-if="!chatLimitErrorMessage" class="action-menu">
 				<view v-for="action in actions" :key="action.key" class="action-item" @click="handleAction(action)">
 					<view class="action-icon-wrap">
 						<image :src="action.iconUrl" mode="aspectFit" :style="action.style"></image>
@@ -19,13 +19,19 @@
 			</view>
 		</view>
 
-		<scroll-view ref="messageScroll" class="message-scroll" :class="{ 'message-scroll--panel': activePanel }"
+		<scroll-view ref="messageScroll" class="message-scroll"
+			:class="{ 'message-scroll--panel': activePanel && !chatLimitErrorMessage, 'message-scroll--limits-error': chatLimitErrorMessage }"
 			:style="{ top: scrollTopStyle }" scroll-y :scroll-top="scrollTop" :scroll-into-view="scrollIntoView"
 			:scroll-with-animation="scrollWithAnimation" :refresher-enabled="messages.length > 0 && !historyExhausted"
 			:refresher-triggered="isRefreshingHistory" :refresher-threshold="60" refresher-background="#f3f6f8"
 			refresher-default-style="black" @scroll="handleMessageScroll" @refresherrefresh="handleHistoryRefresh"
 			@click="closePanel">
-			<view class="message-content">
+			<view class="message-content" :class="{ 'message-content--limits-error': chatLimitErrorMessage }">
+				<view v-if="chatLimitErrorMessage" class="chat-limit-error-state">
+					<image src="../../../static/empty_content.jpg" class="chat-limit-error-image" mode="aspectFit"></image>
+					<text class="chat-limit-error-message">{{ chatLimitErrorMessage }}</text>
+				</view>
+				<template v-else>
 				<view class="load-status" :class="{ 'load-status--error': historyLoadError }" @click="retryChatLoad">
 					<text v-if="isCheckingLimits">正在检查沟通状态...</text>
 					<text v-else-if="isWaitingForNim">正在连接聊天服务...</text>
@@ -115,10 +121,11 @@
 				</template>
 
 				<view id="message-bottom" class="message-bottom"></view>
+				</template>
 			</view>
 		</scroll-view>
 
-		<view class="composer">
+		<view v-if="!chatLimitErrorMessage" class="composer">
 			<view class="composer-main">
 				<image v-if="isVoiceMode || activePanel === 'phrases'" src="../../../static/icon_key.png"
 					class="phrase-icon" mode="aspectFit" @click="handleKeyboardButton"></image>
@@ -751,6 +758,8 @@
 				scrollWithAnimation: false,
 				isRefreshingHistory: false,
 				isCheckingLimits: false,
+				chatLimitErrorMessage: '',
+				initialSuccessStep: null,
 				isSwitchingChatJob: false,
 				isWaitingForNim: false,
 				isLoadingHistory: false,
@@ -821,7 +830,7 @@
 				return result
 			},
 			scrollTopStyle() {
-				return `calc(${this.statusBarHeight}px + 220rpx)`
+				return `calc(${this.statusBarHeight}px + ${this.chatLimitErrorMessage ? '88rpx' : '220rpx'})`
 			},
 			recordingCountdown() {
 				const remaining = MAX_VOICE_DURATION - this.recordingElapsed
@@ -842,6 +851,16 @@
 			this.externalReturnUrl = getExternalReturnUrl(options)
 			// 历史详情的继续聊聊已发送指定消息，此入口不再重复发送初始化招呼语。
 			this._skipInitialChatGreeting = String(options.skipGreeting || '') === '1'
+			const rawSuccessStep = options.successStep
+			if (rawSuccessStep && typeof rawSuccessStep === 'object') this.initialSuccessStep = rawSuccessStep
+			else if (typeof rawSuccessStep === 'string' && rawSuccessStep.trim()) {
+				try { this.initialSuccessStep = JSON.parse(rawSuccessStep) } catch (error) {
+					try { this.initialSuccessStep = JSON.parse(decodeURIComponent(rawSuccessStep)) } catch (decodeError) {}
+				}
+			}
+			if (!this.initialSuccessStep || typeof this.initialSuccessStep !== 'object' || Array.isArray(this.initialSuccessStep)) {
+				this.initialSuccessStep = null
+			}
 			const systemInfo = uni.getSystemInfoSync()
 			this.statusBarHeight = systemInfo.statusBarHeight || 0
 			this._chatPageAlive = true
@@ -939,7 +958,14 @@
 
 				this.isCheckingLimits = true
 				this.historyLoadError = ''
+				this.chatLimitErrorMessage = ''
 				try {
+					if (this.initialSuccessStep) {
+						const successStep = this.initialSuccessStep
+						this.initialSuccessStep = null
+						this.handleSuccessStep(successStep)
+						return
+					}
 					// 先校验当前职位与简历是否允许进入聊天，再决定是否读取云信消息。
 					const response = await requestApi({
 						Name: CHAT_LIMITS_API,
@@ -953,6 +979,10 @@
 						const errorMessage = response && typeof response.ErrorMessage === 'string' ?
 							response.ErrorMessage.trim() :
 							''
+						if (errorMessage) {
+							this.chatLimitErrorMessage = errorMessage
+							return
+						}
 						throw new Error(errorMessage || `获取沟通状态失败，业务错误码：${code}`)
 					}
 
@@ -974,21 +1004,7 @@
 
 					const successStep = data.SuccessStep || response.SuccessStep
 					if (successStep) {
-						this.historyExhausted = true
-						const stepName = String(successStep.StepName || '').trim()
-						uni.showModal({
-							content: String(successStep.Tips || ''),
-							confirmText: stepName || '确定',
-							cancelText: '取消',
-							showCancel: true,
-							success: result => {
-								if (result && result.cancel) {
-									this.navigateBack()
-									return
-								}
-								this.navigateByStep(stepName)
-							}
-						})
+						this.handleSuccessStep(successStep)
 						return
 					}
 
@@ -1054,6 +1070,53 @@
 					if (this._chatPageAlive) this.isCheckingLimits = false
 				}
 			},
+			handleSuccessStep(successStep) {
+				this.historyExhausted = true
+				this._pendingChatGreeting = null
+				const stepName = String(successStep && successStep.StepName || '').trim()
+				uni.showModal({
+					content: String(successStep && successStep.Tips || ''),
+					confirmText: stepName || '确定',
+					cancelText: '取消',
+					showCancel: true,
+					success: result => {
+						if (result && result.cancel) {
+							this.navigateBack()
+							return
+						}
+						this.navigateByStep(stepName)
+					}
+				})
+			},
+			async checkChatLimitsBeforeSend() {
+				const jobId = this.jobId === undefined || this.jobId === null ? '' : String(this.jobId).trim()
+				const resumeId = this.resumeId === undefined || this.resumeId === null ? '' : String(this.resumeId).trim()
+				if (!jobId || !resumeId) throw new Error('缺少 jobId 或 resumeId')
+				const conversationId = this.conversationId
+				const enterpriseAccId = this.enterpriseAccId
+				const response = await requestApi({
+					Name: CHAT_LIMITS_API,
+					Content: { JobId: jobId, ResumeId: resumeId }
+				})
+				if (!this._chatPageAlive || this.conversationId !== conversationId ||
+					String(this.jobId || '').trim() !== jobId || String(this.resumeId || '').trim() !== resumeId ||
+					this.enterpriseAccId !== enterpriseAccId) return false
+				if (!response || Number(response.Code) !== 0) {
+					const code = response && response.Code !== undefined ? response.Code : 'unknown'
+					const errorMessage = response && typeof response.ErrorMessage === 'string' ? response.ErrorMessage.trim() : ''
+					throw new Error(errorMessage || `获取沟通状态失败，业务错误码：${code}`)
+				}
+				const data = parseResponseData(response.Data, '沟通限制接口返回的数据格式不正确')
+				if (data.Code !== undefined && Number(data.Code) !== 0) {
+					throw new Error(`获取沟通状态失败，数据错误码：${data.Code}`)
+				}
+				const successStep = data.SuccessStep || response.SuccessStep
+				if (successStep) {
+					this.handleSuccessStep(successStep)
+					return false
+				}
+				return true
+			},
 			async loadChatGreeting(limitsMessage, jobId) {
 				const response = await requestApi({
 					Name: CHAT_BUTTON_API,
@@ -1097,6 +1160,7 @@
 
 					// 招呼语流程：先发送 { type: 4, data: Limits.Message } 自定义消息，再发送 Greetings 文本消息。
 					if (!pendingGreeting.customSent) {
+						if (!await this.checkChatLimitsBeforeSend()) return
 						const customMessage = messageCreator.createCustomMessage('', JSON.stringify({
 							type: 4,
 							data: pendingGreeting.limitsMessage
@@ -1109,6 +1173,7 @@
 						await this.mergeMessages([customResult.message])
 					}
 
+					if (!await this.checkChatLimitsBeforeSend()) return
 					const textMessage = messageCreator.createTextMessage(maskPhoneNumbers(pendingGreeting.greetingText))
 					const textResult = await messageService.sendMessage(textMessage, this.conversationId)
 					if (!textResult || !textResult.message) throw new Error('默认招呼语文本发送失败：SDK 未返回消息')
@@ -1179,6 +1244,7 @@
 					// 职位切换成功后发送自定义消息，消息体固定为 { type: 5, data: Enterprise }。
 					const customMessageBody = { type: 5, data: enterprise }
 					const message = nim.V2NIMMessageCreator.createCustomMessage('', JSON.stringify(customMessageBody))
+					if (!await this.checkChatLimitsBeforeSend()) return
 					const result = await messageService.sendMessage(message, this.conversationId)
 					if (!result || !result.message) throw new Error('自定义消息发送失败：SDK 未返回消息')
 
@@ -2638,6 +2704,7 @@
 				this.isSendingMessage = true
 				let loadingVisible = false
 				try {
+					if (!await this.checkChatLimitsBeforeSend()) return false
 					const isOtherBlocked = await this.checkOtherBlockedBeforeSend()
 					if (!isOtherBlocked) {
 						uni.showLoading({ title: '语音发送中...', mask: true })
@@ -3451,6 +3518,7 @@
 				this.imageUploadProgress = 0
 				let loadingVisible = false
 				try {
+					if (!await this.checkChatLimitsBeforeSend()) return false
 					const isOtherBlocked = await this.checkOtherBlockedBeforeSend()
 					if (!isOtherBlocked) {
 						uni.showLoading({
@@ -3536,6 +3604,7 @@
 
 				this.isSendingMessage = true
 				try {
+					if (!await this.checkChatLimitsBeforeSend()) return false
 					await this.checkOtherBlockedBeforeSend()
 					const nim = getNimInstance()
 					const message = nim.V2NIMMessageCreator.createTextMessage(maskPhoneNumbers(content))
@@ -3698,12 +3767,48 @@
 		&.message-scroll--panel {
 			bottom: calc(412rpx + env(safe-area-inset-bottom));
 		}
+
+		&.message-scroll--limits-error {
+			bottom: 0;
+			background: #ffffff;
+		}
 	}
 
 	.message-content {
 		box-sizing: border-box;
 		min-height: 100%;
 		padding: 0 28rpx 30rpx;
+	}
+
+	.message-content--limits-error {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 100%;
+		padding: 0;
+	}
+
+	.chat-limit-error-state {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		width: 100%;
+	}
+
+	.chat-limit-error-image {
+		width: 400rpx;
+		height: 194rpx;
+	}
+
+	.chat-limit-error-message {
+		box-sizing: border-box;
+		max-width: 100%;
+		margin-top: 40rpx;
+		padding: 0 28rpx;
+		font-size: 28rpx;
+		line-height: 40rpx;
+		color: #5c636f;
+		text-align: center;
 	}
 
 	.load-status {

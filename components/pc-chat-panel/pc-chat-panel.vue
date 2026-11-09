@@ -1,17 +1,17 @@
 <template>
 	<view class="chat-panel" @click="closeComposerPanels">
 		<view class="chat-panel-header">
-			<view class="job-context">
+			<view v-show="!limitsErrorMessage" class="job-context">
 				<text>当前沟通职位：</text>
 				<text class="job-name">{{ jobName || detail.jobName || '职位沟通' }}</text>
 				<text class="action-link" @click="emitAction('switch-job', '切换职位')">切换</text>
 			</view>
 			<text class="chat-title">{{ otherUser.name || conversation.name }}</text>
-			<text class="action-link resume-link" @click="emitAction('resume', '查看简历')">查看简历</text>
+			<text v-show="!limitsErrorMessage" class="action-link resume-link" @click="emitAction('resume', '查看简历')">查看简历</text>
 		</view>
 
-		<scroll-view class="message-scroll" scroll-y :scroll-into-view="scrollTarget"
-			:upper-threshold="60" @scroll="closeMessageContextMenu" @scrolltoupper="loadEarlierMessages(false)">
+		<scroll-view class="message-scroll" scroll-y :scroll-into-view="scrollTarget" :upper-threshold="60"
+			@scroll="closeMessageContextMenu" @scrolltoupper="loadEarlierMessages(false)">
 			<view class="message-content">
 				<view v-if="messages.length" class="history-state" @click="loadEarlierMessages(false)">
 					{{ isLoadingHistory ? '正在加载聊天记录...' : historyExhausted ? '' : '加载更多消息' }}
@@ -40,38 +40,52 @@
 							@click.stop="emitAction('resume', '查看简历')">
 							<text class="person-message-name">{{ message.person.name }}</text>
 							<view v-if="message.person.meta.length" class="person-message-meta">
-								<text v-for="(item, index) in message.person.meta" :key="index" class="person-message-meta-item">{{ item }}</text>
+								<text v-for="(item, index) in message.person.meta" :key="index"
+									class="person-message-meta-item">{{ item }}</text>
 							</view>
-							<view v-if="message.person.jobName || message.person.location" class="person-message-intention">
+							<view v-if="message.person.jobName || message.person.location"
+								class="person-message-intention">
 								<view v-if="message.person.jobName" class="person-message-intention-item">
 									<!-- 复用项目已有的职位 icon：static/pc/icon_job.png。 -->
-									<image src="/static/pc/icon_job.png" class="person-message-icon" mode="aspectFit"></image>
+									<image src="/static/pc/icon_job.png" class="person-message-icon" mode="aspectFit">
+									</image>
 									<text>{{ message.person.jobName }}</text>
 								</view>
 								<view v-if="message.person.location" class="person-message-intention-item">
 									<!-- 复用项目已有的地点 icon：static/pc/icon_location.png。 -->
-									<image src="/static/pc/icon_location.png" class="person-message-icon" mode="aspectFit"></image>
+									<image src="/static/pc/icon_location.png" class="person-message-icon"
+										mode="aspectFit"></image>
 									<text>{{ message.person.location }}</text>
 								</view>
 							</view>
 						</view>
-						<image v-else :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
-							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
+						<image v-else :src="message.direction === 'self' ? selfAvatar : otherAvatar"
+							class="message-avatar" mode="aspectFill" @error="handleAvatarError(message.direction)">
+						</image>
 						<view v-if="message.type === 'image'" class="message-bubble message-bubble--image"
 							@click="previewImage(message.url)">
-							<image :src="message.url" class="message-image" mode="widthFix" @load="handleMessageImageLoad"></image>
+							<image :src="message.url" class="message-image" mode="widthFix"
+								@load="handleMessageImageLoad"></image>
 						</view>
 						<button v-else-if="message.type === 'audio'" class="message-bubble message-bubble--audio"
-							:class="{ 'audio-active': audioActiveId === message.id }" :style="{ width: message.audioWidth }"
-							:aria-label="audioButtonLabel(message)" :title="audioButtonLabel(message)"
-							:aria-pressed="audioActiveId === message.id ? 'true' : 'false'" @click="playAudioMessage(message)">
+							:class="{ 'audio-active': audioActiveId === message.id }"
+							:style="{ width: message.audioWidth }" :aria-label="audioButtonLabel(message)"
+							:title="audioButtonLabel(message)"
+							:aria-pressed="audioActiveId === message.id ? 'true' : 'false'"
+							@click="playAudioMessage(message)">
 							<view class="audio-indicator" aria-hidden="true">
-								<view v-if="audioActiveId === message.id && audioState === 'loading'" class="audio-spinner"></view>
-								<text v-else class="audio-play-icon">{{ audioActiveId === message.id ? '❚❚' : '▶' }}</text>
+								<view v-if="audioActiveId === message.id && audioState === 'loading'"
+									class="audio-spinner"></view>
+								<text v-else
+									class="audio-play-icon">{{ audioActiveId === message.id ? '❚❚' : '▶' }}</text>
 							</view>
-							<view class="audio-waveform" :class="{ 'audio-waveform--playing': audioActiveId === message.id && audioState === 'playing' }"
-								aria-hidden="true"><view v-for="bar in 5" :key="bar" class="audio-wave-bar"></view></view>
-							<text class="audio-duration">{{ message.durationSeconds ? message.durationSeconds + '"' : '--"' }}</text>
+							<view class="audio-waveform"
+								:class="{ 'audio-waveform--playing': audioActiveId === message.id && audioState === 'playing' }"
+								aria-hidden="true">
+								<view v-for="bar in 5" :key="bar" class="audio-wave-bar"></view>
+							</view>
+							<text
+								class="audio-duration">{{ message.durationSeconds ? message.durationSeconds + '"' : '--"' }}</text>
 						</button>
 						<view v-else-if="message.type !== 'person-card'" class="message-bubble message-bubble--text">
 							<view class="message-text">
@@ -88,27 +102,38 @@
 			</view>
 		</scroll-view>
 
-		<view class="composer">
+		<view v-show="!limitsErrorMessage" class="composer">
 			<view class="composer-toolbar">
-				<text class="composer-tool" @click.stop="toggleEmojiPanel"><image src="/static/pc/icon_emoji.png" class="tool-icon"></image> 表情</text>
+				<text class="composer-tool" @click.stop="toggleEmojiPanel">
+					<image src="/static/pc/icon_emoji.png" class="tool-icon"></image> 表情
+				</text>
 				<button class="composer-tool composer-tool--button" :class="{ 'composer-tool--active': phrasesVisible }"
 					:aria-expanded="phrasesVisible ? 'true' : 'false'" @click.stop="togglePhrasePanel">
 					<image src="/static/pc/icon_common.png" class="tool-icon"></image> 常用语
 				</button>
-				<text class="composer-tool" @click="emitAction('interview', '面试邀请')"><image src="/static/pc/icon_msyq.png" class="tool-icon"></image> 面试邀请</text>
+				<text class="composer-tool" @click="emitAction('interview', '面试邀请')">
+					<image src="/static/pc/icon_msyq.png" class="tool-icon"></image> 面试邀请
+				</text>
 				<!-- <text class="composer-tool" @click="emitAction('mobile', '手机聊天')"><text class="tool-icon">▦</text> 手机聊天</text> -->
 				<view class="toolbar-right">
-					<text class="composer-tool" @click="emitAction('unsuitable', '不合适')"><image src="/static/pc/icon_bhs.png" class="tool-icon"></image> 不合适</text>
+					<text class="composer-tool" @click="emitAction('unsuitable', '不合适')">
+						<image src="/static/pc/icon_bhs.png" class="tool-icon"></image> 不合适
+					</text>
 					<!-- 权限校验完成后才可置顶；保存期间禁用入口，避免连续点击重复提交。 -->
-					<button class="composer-tool composer-tool--button composer-pin" :class="{ 'composer-tool--active': isPinned }"
-						:disabled="isPinning || !accessReady || opening" :aria-busy="isPinning ? 'true' : 'false'"
-						:aria-pressed="isPinned ? 'true' : 'false'" :title="isPinned ? '取消置顶' : '置顶'" @click="togglePinned">
-						<image src="/static/pc/icon_top.png" class="tool-icon"></image> {{ isPinning ? '保存中...' : isPinned ? '取消置顶' : '置顶' }}
+					<button class="composer-tool composer-tool--button composer-pin"
+						:class="{ 'composer-tool--active': isPinned }" :disabled="isPinning || !accessReady || opening"
+						:aria-busy="isPinning ? 'true' : 'false'" :aria-pressed="isPinned ? 'true' : 'false'"
+						:title="isPinned ? '取消置顶' : '置顶'" @click="togglePinned">
+						<image src="/static/pc/icon_top.png" class="tool-icon"></image>
+						{{ isPinning ? '保存中...' : isPinned ? '取消置顶' : '置顶' }}
 					</button>
 					<view class="more-menu-trigger" @mouseenter="openMoreMenu" @mouseleave="moreMenuVisible = false"
 						@focusin="openMoreMenu" @focusout="handleMoreMenuBlur" @click.stop>
 						<button class="composer-tool composer-tool--button tool-more" aria-label="更多操作"
-							aria-haspopup="true" :aria-expanded="moreMenuVisible ? 'true' : 'false'" @click="openMoreMenu"><image src="/static/pc/icon_more.png" class="tool-icon"></image></button>
+							aria-haspopup="true" :aria-expanded="moreMenuVisible ? 'true' : 'false'"
+							@click="openMoreMenu">
+							<image src="/static/pc/icon_more.png" class="tool-icon" style="margin-right: 0;"></image>
+						</button>
 						<view v-if="moreMenuVisible" class="more-menu-popover">
 							<view class="more-menu">
 								<!-- 黑名单状态来自云信；查询和保存期间禁用，避免按旧状态执行反向操作。 -->
@@ -134,8 +159,9 @@
 					<view v-else-if="!commonPhrases.length" class="phrase-status">暂无常用语</view>
 					<block v-else>
 						<!-- 只省略展示文字，发送时仍使用接口返回的完整常用语；与普通发送共用锁，防止重复发送。 -->
-						<button v-for="phrase in commonPhrases" :key="phrase.key" class="phrase-item" :title="phrase.message"
-							:aria-label="'发送常用语：' + phrase.message" :disabled="!canSendText" @click="sendCommonPhrase(phrase)">
+						<button v-for="phrase in commonPhrases" :key="phrase.key" class="phrase-item"
+							:title="phrase.message" :aria-label="'发送常用语：' + phrase.message" :disabled="!canSendText"
+							@click="sendCommonPhrase(phrase)">
 							<text class="phrase-message">{{ phrase.displayMessage }}</text>
 							<text v-if="sendingPhraseKey === phrase.key" class="phrase-sending">发送中...</text>
 						</button>
@@ -144,7 +170,8 @@
 			</view>
 			<view v-if="emojiVisible" class="emoji-panel" @click.stop>
 				<!-- 表情 key 与消息文本保持一致，图片地址复用手机端的网易云信表情资源。 -->
-				<view v-for="emoji in emojis" :key="emoji.key" class="emoji-item" :title="emoji.key" @click="appendEmoji(emoji)">
+				<view v-for="emoji in emojis" :key="emoji.key" class="emoji-item" :title="emoji.key"
+					@click="appendEmoji(emoji)">
 					<image :src="emoji.url" :aria-label="emoji.key" class="emoji-image" mode="aspectFit"></image>
 				</view>
 			</view>
@@ -156,11 +183,13 @@
 				<!-- #endif -->
 				<!-- #ifndef H5 -->
 				<textarea v-model="draft" class="composer-input" :maxlength="2000" placeholder="输入消息"
-					:disabled="!accessReady || opening" :show-confirm-bar="false" @focus="closeComposerPanels"></textarea>
+					:disabled="!accessReady || opening" :show-confirm-bar="false"
+					@focus="closeComposerPanels"></textarea>
 				<!-- #endif -->
 				<view class="composer-footer">
 					<text class="composer-hint">按Enter键发送，按Ctrl+Enter换行</text>
-					<button class="send-button" :disabled="!canSend" @click="sendMessage">{{ isSending ? '发送中' : '发送' }}</button>
+					<button class="send-button" :disabled="!canSend"
+						@click="sendMessage">{{ isSending ? '发送中' : '发送' }}</button>
 				</view>
 			</view>
 		</view>
@@ -169,18 +198,21 @@
 		<view v-if="jobPickerVisible" class="job-picker-mask" @click="closeJobPicker">
 			<view class="job-picker" @click.stop>
 				<view class="job-picker-header">
-					<text class="job-picker-title">{{ jobList.length || isLoadingJobs || jobListError ? '点击选择沟通职位' : '请选择沟通职位' }}</text>
+					<text
+						class="job-picker-title">{{ jobList.length || isLoadingJobs || jobListError ? '点击选择沟通职位' : '请选择沟通职位' }}</text>
 					<button class="job-picker-close" aria-label="关闭职位列表" title="关闭" @click="closeJobPicker">×</button>
 				</view>
 				<view v-if="isLoadingJobs" class="job-picker-state">职位加载中...</view>
 				<view v-else-if="isSwitchingJob" class="job-picker-state">切换中...</view>
-				<view v-else-if="jobListError" class="job-picker-state job-picker-state--error">{{ jobListError }}</view>
+				<view v-else-if="jobListError" class="job-picker-state job-picker-state--error">{{ jobListError }}
+				</view>
 				<view v-else-if="!jobList.length" class="job-picker-empty">
 					<text>暂无职位数据，马上发布发起聊天吧</text>
 					<button class="job-publish-button" @click="emitAction('publish-job', '马上发布')">马上发布</button>
 				</view>
 				<scroll-view v-else scroll-y class="job-picker-list">
-					<button v-for="job in jobList" :key="job.key" class="job-picker-item" :disabled="isSwitchingJob" @click="selectJob(job)">
+					<button v-for="job in jobList" :key="job.key" class="job-picker-item" :disabled="isSwitchingJob"
+						@click="selectJob(job)">
 						<text class="job-picker-item-name">{{ job.name }}</text>
 						<text class="job-picker-item-detail">{{ job.location }} - {{ job.salary }}</text>
 					</button>
@@ -190,8 +222,8 @@
 
 		<!-- PC 端仅为自己发送、尚未撤回的消息显示右键菜单；坐标由事件位置计算并限制在视口内。 -->
 		<view v-if="messageContextMenu.visible" class="message-context-menu" role="menu"
-			:style="{ left: messageContextMenu.left + 'px', top: messageContextMenu.top + 'px' }"
-			@click.stop @contextmenu.stop.prevent>
+			:style="{ left: messageContextMenu.left + 'px', top: messageContextMenu.top + 'px' }" @click.stop
+			@contextmenu.stop.prevent>
 			<button class="message-context-menu-item" role="menuitem" :disabled="messageActionId !== ''"
 				@click="confirmRevokeMessage">{{ messageActionId ? '撤回中...' : '撤回' }}</button>
 		</view>
@@ -200,15 +232,37 @@
 
 <script>
 	import {
-		NIM_EVENT, getNimInstance, isNimLoggedIn,
-		setActiveConversationId, getActiveConversationId, clearActiveConversationId
+		NIM_EVENT,
+		getNimInstance,
+		isNimLoggedIn,
+		setActiveConversationId,
+		getActiveConversationId,
+		clearActiveConversationId
 	} from '../../services/nim'
-	import { markNimConversationRead, sendNimP2PReadReceipt, formatConversationTime } from '../../services/conversation'
-	import { requestApi } from '../../services/request'
-	import { getTalentAvatar } from '../../services/talent-avatar'
-	import { getAudioMimeType, audioDurationSeconds, audioBubbleWidth, createPcAudioPlayer } from '../../services/pc-chat-audio'
-	import { NIM_EMOJIS, parseNimEmojiText } from '../../services/nim-emoji'
-	import { maskPhoneNumbers } from '../../services/mask-phone'
+	import {
+		markNimConversationRead,
+		sendNimP2PReadReceipt,
+		formatConversationTime
+	} from '../../services/conversation'
+	import {
+		requestApi
+	} from '../../services/request'
+	import {
+		getTalentAvatar
+	} from '../../services/talent-avatar'
+	import {
+		getAudioMimeType,
+		audioDurationSeconds,
+		audioBubbleWidth,
+		createPcAudioPlayer
+	} from '../../services/pc-chat-audio'
+	import {
+		NIM_EMOJIS,
+		parseNimEmojiText
+	} from '../../services/nim-emoji'
+	import {
+		maskPhoneNumbers
+	} from '../../services/mask-phone'
 
 	const DEFAULT_AVATAR = '/static/default_avatar.png'
 	const HISTORY_PAGE_SIZE = 50
@@ -225,7 +279,13 @@
 	const MESSAGE_REEDIT_LIMIT = 5 * 60 * 1000
 	const MESSAGE_REEDIT_EXPIRED_MESSAGE = '发送时间超过5分钟的消息，不能重新编辑'
 	const REVOKED_MESSAGE_TEXT = '你撤回了一条消息'
-	const MESSAGE_LABELS = { 2: '[语音]', 3: '[视频]', 4: '[位置]', 6: '[文件]', 100: '[自定义消息]' }
+	const MESSAGE_LABELS = {
+		2: '[语音]',
+		3: '[视频]',
+		4: '[位置]',
+		6: '[文件]',
+		100: '[自定义消息]'
+	}
 
 	function getErrorCode(error) {
 		// 沿用手机端错误码取值方式，兼容 SDK 数字 code 和接口包装后的字符串 code。
@@ -251,8 +311,9 @@
 	}
 
 	function messageId(message) {
-		return String(message.messageClientId || message.messageServerId ||
-			[message.senderId, message.createTime, message.messageType, message.text].join('-'))
+		return String(message.messageClientId || message.messageServerId || [message.senderId, message.createTime, message
+			.messageType, message.text
+		].join('-'))
 	}
 
 	function responseData(response) {
@@ -338,10 +399,16 @@
 			formatPersonGender(responseValue(person, ['Gender', 'GenderName', 'Sex', 'SexName'])),
 			formatPersonAge(responseValue(person, ['Age', 'PersonAge'])),
 			responseValue(person, ['Education', 'EducationName', 'EducationalBackground', 'Degree', 'EduName']),
-			responseValue(person, ['Experience', 'WorkExperience', 'WorkYears', 'WorkingYears', 'WorkYear', 'WorkExperienceName'])
+			responseValue(person, ['Experience', 'WorkExperience', 'WorkYears', 'WorkingYears', 'WorkYear',
+				'WorkExperienceName'
+			])
 		].filter(Boolean)
-		const jobName = responseValue(person, ['Post', 'JobName', 'Job', 'ExpectedJob', 'ExpectJob', 'Position', 'PositionName', 'IntentionalPosition', 'IntendedPosition', 'JobIntention', 'IntentionJob'])
-		const location = responseValue(person, ['Location', 'City', 'Address', 'AddressName', 'ExpectedLocation', 'ExpectLocation', 'JobLocation', 'WorkLocation', 'WorkCity', 'Area', 'IntentionCity'])
+		const jobName = responseValue(person, ['Post', 'JobName', 'Job', 'ExpectedJob', 'ExpectJob', 'Position',
+			'PositionName', 'IntentionalPosition', 'IntendedPosition', 'JobIntention', 'IntentionJob'
+		])
+		const location = responseValue(person, ['Location', 'City', 'Address', 'AddressName', 'ExpectedLocation',
+			'ExpectLocation', 'JobLocation', 'WorkLocation', 'WorkCity', 'Area', 'IntentionCity'
+		])
 		if (!name && !meta.length && !jobName && !location) return null
 
 		return {
@@ -350,7 +417,7 @@
 			jobName,
 			location
 		}
-		}
+	}
 
 	function formatJobChangeMessage(job) {
 		if (!job || typeof job !== 'object') return ''
@@ -361,59 +428,136 @@
 	export default {
 		name: 'PcChatPanel',
 		props: {
-			conversation: { type: Object, required: true },
-			jobId: { type: String, required: true },
-			resumeId: { type: String, required: true },
-			personAccId: { type: String, required: true },
-			enterpriseAccId: { type: String, required: true },
-			detail: { type: Object, required: true },
-			drafts: { type: Object, required: true },
+			conversation: {
+				type: Object,
+				required: true
+			},
+			jobId: {
+				type: String,
+				required: true
+			},
+			resumeId: {
+				type: String,
+				required: true
+			},
+			personAccId: {
+				type: String,
+				required: true
+			},
+			enterpriseAccId: {
+				type: String,
+				required: true
+			},
+			detail: {
+				type: Object,
+				required: true
+			},
+			drafts: {
+				type: Object,
+				required: true
+			},
 			// 外链在会话列表缺失时由父页首次请求的 Limits 响应；消费后由父页清空，重试会重新请求。
-			initialAccess: { type: Object, default: null },
-			visible: { type: Boolean, default: true },
-			opening: { type: Boolean, default: false },
+			initialAccess: {
+				type: Object,
+				default: null
+			},
+			visible: {
+				type: Boolean,
+				default: true
+			},
+			opening: {
+				type: Boolean,
+				default: false
+			},
 			// 历史会话继续沟通已在进入实时面板前发送指定消息，避免再次发送默认招呼语。
-			skipGreeting: { type: Boolean, default: false }
+			skipGreeting: {
+				type: Boolean,
+				default: false
+			}
 		},
 		data() {
 			return {
 				jobName: this.detail.jobName || '',
-				jobPickerVisible: false, isLoadingJobs: false, isSwitchingJob: false, jobList: [], jobListError: '',
-				messages: [], accessReady: false, isCheckingAccess: false, accessError: '',
-				isLoadingHistory: false, historyExhausted: false, historyError: '', scrollTarget: '',
+				jobPickerVisible: false,
+				isLoadingJobs: false,
+				isSwitchingJob: false,
+				jobList: [],
+				jobListError: '',
+				messages: [],
+				accessReady: false,
+				isCheckingAccess: false,
+				accessError: '',
+				limitsErrorMessage: '',
+				isLoadingHistory: false,
+				historyExhausted: false,
+				historyError: '',
+				scrollTarget: '',
 				// 分页插入旧消息后，图片异步加载不能把阅读位置重新拉到底部。
 				_historyScrollAnchor: '',
-				isSending: false, isComposing: false, selfUser: {}, otherUser: {}, failedAvatars: {},
-				audioActiveId: '', audioState: 'idle', audioDurations: {},
+				isSending: false,
+				isComposing: false,
+				selfUser: {},
+				otherUser: {},
+				failedAvatars: {},
+				audioActiveId: '',
+				audioState: 'idle',
+				audioDurations: {},
 				// 业务接口明确返回 false 时不能被云信旧缓存覆盖；未返回状态时才使用本地会话兜底。
-				isPinning: false, isPinned: this.detail.isPinned !== undefined
-					? Boolean(this.detail.isPinned) : Boolean(this.conversation.stickTop), emojiVisible: false,
-				moreMenuVisible: false, phrasesVisible: false, commonPhrases: [], commonPhrasesLoaded: false,
+				isPinning: false,
+				isPinned: this.detail.isPinned !== undefined ?
+					Boolean(this.detail.isPinned) : Boolean(this.conversation.stickTop),
+				emojiVisible: false,
+				moreMenuVisible: false,
+				phrasesVisible: false,
+				commonPhrases: [],
+				commonPhrasesLoaded: false,
 				// 查询成功前不把默认 false 当成真实状态；失败时只提供重试，不直接执行屏蔽。
-				isOtherBlocked: false, blockStatusLoaded: false, blockStatusError: '',
-				isCheckingBlockStatus: false, isUpdatingBlockStatus: false,
-				isLoadingCommonPhrases: false, commonPhrasesError: '', sendingPhraseKey: '',
+				isOtherBlocked: false,
+				blockStatusLoaded: false,
+				blockStatusError: '',
+				isCheckingBlockStatus: false,
+				isUpdatingBlockStatus: false,
+				isLoadingCommonPhrases: false,
+				commonPhrasesError: '',
+				sendingPhraseKey: '',
 				messageActionId: '',
-				messageContextMenu: { visible: false, left: 0, top: 0, messageId: '' },
+				messageContextMenu: {
+					visible: false,
+					left: 0,
+					top: 0,
+					messageId: ''
+				},
 				// 与手机端共用网易云信官方表情数据，发送时写入 [表情名] key。
 				emojis: NIM_EMOJIS
 			}
 		},
 		computed: {
-			conversationId() { return this.detail.conversationId },
-			draft: {
-				get() { return this.drafts[this.conversationId] || '' },
-				set(value) { this.$set(this.drafts, this.conversationId, value) }
+			conversationId() {
+				return this.detail.conversationId
 			},
-			canSendText() { return this.visible && this.accessReady && !this.opening && !this.isSending },
-			canSend() { return this.canSendText && Boolean(this.draft.trim()) },
+			draft: {
+				get() {
+					return this.drafts[this.conversationId] || ''
+				},
+				set(value) {
+					this.$set(this.drafts, this.conversationId, value)
+				}
+			},
+			canSendText() {
+				return this.visible && this.accessReady && !this.opening && !this.isSending
+			},
+			canSend() {
+				return this.canSendText && Boolean(this.draft.trim())
+			},
 			blockActionLabel() {
 				if (this.isUpdatingBlockStatus) return '处理中...'
 				if (this.isCheckingBlockStatus) return '查询中...'
 				if (!this.blockStatusLoaded) return '重试查询'
 				return this.isOtherBlocked ? '取消屏蔽' : '屏蔽TA'
 			},
-			selfAvatar() { return this.profileAvatar(this.selfUser.avatar, DEFAULT_AVATAR) },
+			selfAvatar() {
+				return this.profileAvatar(this.selfUser.avatar, DEFAULT_AVATAR)
+			},
 			otherAvatar() {
 				const conversationAvatar = this.conversation.avatar === DEFAULT_AVATAR ? '' : this.conversation.avatar
 				return this.profileAvatar(this.otherUser.avatar || conversationAvatar, getTalentAvatar(this.otherUser))
@@ -427,7 +571,11 @@
 					const timestamp = Number(message.createTime) || 0
 					// 首条消息及间隔超过五分钟的消息显示时间，气泡保持正序。
 					if (timestamp && (!previousTime || timestamp - previousTime >= 5 * 60 * 1000)) {
-						rows.push({ id: `time-${id}`, type: 'time', content: formatConversationTime(timestamp) })
+						rows.push({
+							id: `time-${id}`,
+							type: 'time',
+							content: formatConversationTime(timestamp)
+						})
 					}
 					previousTime = timestamp
 					const type = Number(message.messageType)
@@ -440,20 +588,30 @@
 						parseJobMessageData(customPayload.data) : null
 					const person = customType === 4 ? parsePersonMessageData(customPayload.data) : null
 					const jobChangeContent = customType === 5 ? formatJobChangeMessage(customData) : ''
-					const content = jobChangeContent || (revoked ? (message.isSelf || message.senderId === this.enterpriseAccId
-						? REVOKED_MESSAGE_TEXT : '对方撤回了一条消息') : type === 0 || type === 10 ? message.text || '[消息]'
-						: type === 6 && attachment.name ? `[文件] ${attachment.name}` : MESSAGE_LABELS[type] || '[暂不支持的消息]')
+					const content = jobChangeContent || (revoked ? (message.isSelf || message.senderId === this
+							.enterpriseAccId ?
+							REVOKED_MESSAGE_TEXT : '对方撤回了一条消息') : type === 0 || type === 10 ? message.text ||
+						'[消息]' :
+						type === 6 && attachment.name ? `[文件] ${attachment.name}` : MESSAGE_LABELS[type] ||
+						'[暂不支持的消息]')
 					rows.push({
-						id, anchor: this.messageAnchor(id),
-						direction: message.isSelf || message.senderId === this.enterpriseAccId ? 'self' : 'other',
+						id,
+						anchor: this.messageAnchor(id),
+						direction: message.isSelf || message.senderId === this.enterpriseAccId ? 'self' :
+							'other',
 						// PC 端自定义 type=4 使用 Person 字段渲染人才信息卡片；type=5 使用居中系统提示。
-						type: revoked ? 'revoked' : type === 10 || Boolean(jobChangeContent) ? 'system' : person ? 'person-card' : type === 2 ? 'audio' : type === 1 && attachment.url ? 'image' : 'text',
+						type: revoked ? 'revoked' : type === 10 || Boolean(jobChangeContent) ? 'system' :
+							person ? 'person-card' : type === 2 ? 'audio' : type === 1 && attachment.url ?
+							'image' : 'text',
 						timestamp,
 						originalText: revoked ? message.revokedText !== undefined ?
 							String(message.revokedText) : String(message.text || '') : '',
 						url: attachment.url || '',
-						durationSeconds, audioWidth: audioBubbleWidth(durationSeconds), mimeType: getAudioMimeType(attachment),
-						content, person,
+						durationSeconds,
+						audioWidth: audioBubbleWidth(durationSeconds),
+						mimeType: getAudioMimeType(attachment),
+						content,
+						person,
 						// 文本和兼容性提示都走同一解析器，未知 [xxx] 会原样显示。
 						segments: parseNimEmojiText(content)
 					})
@@ -485,8 +643,10 @@
 			// 浏览器切到后台时也停止语音，避免用户已离开页面却继续播放。
 			// #ifdef H5
 			this._audioVisibilityHandler = () => {
-				if (document.hidden) { this.stopAudio(); this.releaseCurrentConversation() }
-				else if (this.visible && this.accessReady) this.activateConversation()
+				if (document.hidden) {
+					this.stopAudio();
+					this.releaseCurrentConversation()
+				} else if (this.visible && this.accessReady) this.activateConversation()
 			}
 			document.addEventListener('visibilitychange', this._audioVisibilityHandler)
 			// 浮层和工具按钮阻止点击冒泡，点击页面其它区域或按 Escape 时关闭。
@@ -519,8 +679,12 @@
 				const input = this.$refs.composerInput
 				this._inputRoot = input && (input.$el || input)
 				if (!this._inputRoot) return
-				this._compositionStart = () => { this.isComposing = true }
-				this._compositionEnd = () => { this.isComposing = false }
+				this._compositionStart = () => {
+					this.isComposing = true
+				}
+				this._compositionEnd = () => {
+					this.isComposing = false
+				}
 				this._inputRoot.addEventListener('keydown', this.handleInputKeydown, true)
 				this._inputRoot.addEventListener('compositionstart', this._compositionStart, true)
 				this._inputRoot.addEventListener('compositionend', this._compositionEnd, true)
@@ -543,8 +707,8 @@
 					let response
 					// 外链场景的父页已经完成一次 Limits 请求，面板只消费这一份响应，避免首屏重复请求。
 					// 初次消费后清空父页缓存；同一实例点击重试时会重新请求最新权限状态。
-					const canUseInitialAccess = this._initialAccessPending === undefined
-						? Boolean(this.initialAccess) : this._initialAccessPending
+					const canUseInitialAccess = this._initialAccessPending === undefined ?
+						Boolean(this.initialAccess) : this._initialAccessPending
 					if (canUseInitialAccess && this.initialAccess) {
 						response = this.initialAccess
 						this._initialAccessPending = false
@@ -552,11 +716,30 @@
 					} else {
 						// 普通点击会话及权限失败后的重试，仍按当前职位/简历请求 Limits。
 						response = await requestApi({
-							Name: 'Chat.MyChat.Limits', Content: { JobId: this.jobId, ResumeId: this.resumeId }
+							Name: 'Chat.MyChat.Limits',
+							Content: {
+								JobId: this.jobId,
+								ResumeId: this.resumeId
+							}
 						})
 					}
-					const data = responseData(response)
 					if (!this._alive) return
+					const errorMessage = response && Number(response.Code) !== 0 ?
+						String(response.ErrorMessage || '').trim() : ''
+					if (errorMessage) {
+						this.accessReady = false
+						this.accessError = errorMessage
+						this.limitsErrorMessage = errorMessage
+						uni.showModal({
+							title: '提示',
+							content: errorMessage,
+							showCancel: false,
+							confirmText: '确定'
+						})
+						return
+					}
+					const data = responseData(response)
+					this.limitsErrorMessage = ''
 					// 与手机端一致，以 Limits 的 IsTop 为准，兼容 Data、根节点及布尔/数字/字符串返回值。
 					// 不监听 stickTop 覆盖业务状态，避免云信同步失败或旧列表刷新时把已保存的状态改回去。
 					const isTop = data.IsTop !== undefined ? data.IsTop : response.IsTop
@@ -569,22 +752,11 @@
 					// 与现有聊天页一致，兼容权限提示位于 Data 或响应根节点的返回结构。
 					const successStep = data.SuccessStep || response.SuccessStep
 					if (successStep) {
-						// 服务端返回后续操作提示时弹窗提醒，不再初始化消息或清除会话未读数。
-						this.accessReady = false
-						const stepName = String(successStep.StepName || '').trim()
-						uni.showModal({
-							content: String(successStep.Tips || ''),
-							confirmText: stepName || '确定',
-							success: result => {
-								// 确认后统一按 Limits.SuccessStep.StepName 执行页面跳转或升级申请。
-								if (result && result.cancel) this.navigateBack()
-								if (result && result.confirm) return this.navigateByStep(stepName)
-							}
-						})
+						this.handleSuccessStep(successStep, true)
 						return
 					}
-					if ((data.PersonAccId && String(data.PersonAccId).trim() !== this.personAccId)
-						|| (data.EnterpriseAccId && String(data.EnterpriseAccId).trim() !== this.enterpriseAccId)) {
+					if ((data.PersonAccId && String(data.PersonAccId).trim() !== this.personAccId) ||
+						(data.EnterpriseAccId && String(data.EnterpriseAccId).trim() !== this.enterpriseAccId)) {
 						throw new Error('沟通账号与当前会话不一致')
 					}
 					this.accessReady = true
@@ -593,8 +765,8 @@
 					this.prepareConversation()
 					// SuccessStep 优先处理；Limits 的会话职位与页面职位不一致时，询问是否切换到页面职位。
 					const returnedJobIdValue = data.JobId !== undefined ? data.JobId : response.JobId
-					const returnedJobId = returnedJobIdValue === undefined || returnedJobIdValue === null
-						? '' : String(returnedJobIdValue).trim()
+					const returnedJobId = returnedJobIdValue === undefined || returnedJobIdValue === null ?
+						'' : String(returnedJobIdValue).trim()
 					const currentJobId = String(this.jobId || '').trim()
 					if (returnedJobId && currentJobId && returnedJobId !== currentJobId) {
 						uni.showModal({
@@ -604,22 +776,24 @@
 							cancelText: '取消',
 							showCancel: true,
 							success: result => {
-								if (!result || !result.confirm || !this._alive
-									|| String(this.jobId || '').trim() !== currentJobId) return
+								if (!result || !result.confirm || !this._alive ||
+									String(this.jobId || '').trim() !== currentJobId) return
 								// 切换目标是当前页面职位；成功后只追加 type=5 自定义消息，不重新加载历史消息。
 								return this.selectJob({
 									jobId: currentJobId,
 									name: this.detail.jobName || '',
 									location: this.detail.jobLocation || '',
 									salary: this.detail.jobSalary || ''
-								}, { previousJobId: returnedJobId })
+								}, {
+									previousJobId: returnedJobId
+								})
 							}
 						})
 					} else if (returnedJobId && returnedJobId === currentJobId) {
 						// 职位一致且 Limits.Message 有内容时，才获取当前简历对应的默认招呼语。
 						const limitsMessage = data.Message !== undefined ? data.Message : response.Message
-						const hasMessage = typeof limitsMessage === 'string' ? Boolean(limitsMessage.trim())
-							: limitsMessage !== undefined && limitsMessage !== null
+						const hasMessage = typeof limitsMessage === 'string' ? Boolean(limitsMessage.trim()) :
+							limitsMessage !== undefined && limitsMessage !== null
 						if (hasMessage && !this.skipGreeting) await this.loadChatGreeting(limitsMessage, currentJobId)
 					}
 				} catch (error) {
@@ -628,108 +802,189 @@
 					if (this._alive) this.isCheckingAccess = false
 				}
 			},
+			handleSuccessStep(successStep, isClose) {
+				// 权限接口要求后续操作时，停用当前会话并复用统一的页面跳转逻辑。
+				this.accessReady = false
+				const stepName = String(successStep && successStep.StepName || '').trim()
+				uni.showModal({
+					content: String(successStep && successStep.Tips || ''),
+					confirmText: stepName || '确定',
+					success: result => {
+						if (result && result.cancel && isClose) this.navigateBack()
+						if (result && result.confirm) return this.navigateByStep(stepName)
+					}
+				})
+			},
+			async checkChatLimitsBeforeSend(jobId, resumeId, isCurrent = () => true) {
+				const checkedJobId = String(jobId === undefined || jobId === null ? '' : jobId).trim()
+				const checkedResumeId = String(resumeId === undefined || resumeId === null ? '' : resumeId).trim()
+				if (!checkedJobId || !checkedResumeId) throw new Error('缺少沟通职位或简历信息')
+				const conversationId = this.conversationId
+				const personAccId = this.personAccId
+				const enterpriseAccId = this.enterpriseAccId
+				const response = await requestApi({
+					Name: 'Chat.MyChat.Limits',
+					Content: {
+						JobId: checkedJobId,
+						ResumeId: checkedResumeId
+					}
+				})
+				if (!this._alive || !isCurrent() || this.conversationId !== conversationId ||
+					this.personAccId !== personAccId || this.enterpriseAccId !== enterpriseAccId) return false
+				const data = responseData(response)
+				const successStep = data.SuccessStep || response.SuccessStep
+				if (successStep) {
+					this.handleSuccessStep(successStep, false)
+					return false
+				}
+				return true
+			},
 			navigateByStep(stepName) {
 				if (!this._alive || !this.visible || this.opening) return
 				const name = String(stepName || '').trim()
 				if (['升级', '立即升级', '立即开通', '申请开通'].includes(name)) return this.requestChatUpgrade()
 				if (name === '立即上传') {
 					// 资质上传直接在用户点击确认时打开新窗口，保留当前聊天页面。
-					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function'
-						? window.open('https://www.texhr.cn/ehr/qualification/', '_blank') : null
-					if (!openedWindow) uni.showToast({ title: '无法打开新窗口，请检查浏览器设置', icon: 'none' })
+					const openedWindow = typeof window !== 'undefined' && typeof window.open === 'function' ?
+						window.open('https://www.texhr.cn/ehr/qualification/', '_blank') : null
+					if (!openedWindow) uni.showToast({
+						title: '无法打开新窗口，请检查浏览器设置',
+						icon: 'none'
+					})
 				} else if (name === '知道了') {
 					this.navigateBack()
 				}
 			},
 			async requestChatUpgrade() {
 				if (this._chatUpgradePromise) return this._chatUpgradePromise
-				const conversationId = this.conversationId, enterpriseAccId = this.enterpriseAccId
-				const isCurrent = () => this._alive && this.visible && !this.opening
-					&& this.conversationId === conversationId && this.enterpriseAccId === enterpriseAccId
+				const conversationId = this.conversationId,
+					enterpriseAccId = this.enterpriseAccId
+				const isCurrent = () => this._alive && this.visible && !this.opening &&
+					this.conversationId === conversationId && this.enterpriseAccId === enterpriseAccId
 				if (!isCurrent()) return
 				this._chatUpgradePromise = (async () => {
 					try {
 						// 文档 1504：三个升级入口共用订购服务接口，Type=9 表示直聊数量。
-						const response = await requestApi({ Name: UPGRADE_SERVICE_API, Content: { Type: 9 } })
+						const response = await requestApi({
+							Name: UPGRADE_SERVICE_API,
+							Content: {
+								Type: 9
+							}
+						})
 						if (!isCurrent()) return
 						if (!response || Number(response.Code) !== 0) throw new Error('提交升级申请失败，请重试')
-						const data = response.Data === undefined || response.Data === null || response.Data === ''
-							? {} : parseObject(response.Data)
+						const data = response.Data === undefined || response.Data === null || response
+							.Data === '' ? {} : parseObject(response.Data)
 						if (!data || (data.Code !== undefined && Number(data.Code) !== 0)) {
 							throw new Error('升级申请返回的数据格式不正确')
 						}
 						const tips = data.Tips !== undefined ? data.Tips : response.Tips
 						uni.showModal({
-							title: '提示', content: "已成功接收您的需求,工作人员会在1个工作日内与您联系.",
-							confirmText: '确定', showCancel: false,
+							title: '提示',
+							content: "已成功接收您的需求,工作人员会在1个工作日内与您联系.",
+							confirmText: '确定',
+							showCancel: false,
 							success: result => {
 								// 升级申请成功后仅在用户确认 Tips 时返回上一页，旧会话回调不再触发跳转。
-								if (result && result.confirm && isCurrent()) this.navigateBack()
+								if (result && result.confirm && isCurrent()) this
+									.navigateBack()
 							}
 						})
 					} catch (error) {
-						if (isCurrent()) uni.showToast({ title: error.message || '提交升级申请失败，请重试', icon: 'none' })
+						if (isCurrent()) uni.showToast({
+							title: error.message || '提交升级申请失败，请重试',
+							icon: 'none'
+						})
 					}
-				})().finally(() => { this._chatUpgradePromise = null })
+				})().finally(() => {
+					this._chatUpgradePromise = null
+				})
 				return this._chatUpgradePromise
 			},
 			navigateBack() {
 				window.close()
 			},
 			isCurrentChatGreeting(greeting) {
-				return Boolean(greeting && this._alive && this.accessReady
-					&& this.conversationId === greeting.conversationId
-					&& this.personAccId === greeting.personAccId && this.enterpriseAccId === greeting.enterpriseAccId
-					&& String(this.jobId || '').trim() === greeting.jobId
-					&& String(this.resumeId || '').trim() === greeting.resumeId)
+				return Boolean(greeting && this._alive && this.accessReady &&
+					this.conversationId === greeting.conversationId &&
+					this.personAccId === greeting.personAccId && this.enterpriseAccId === greeting.enterpriseAccId &&
+					String(this.jobId || '').trim() === greeting.jobId &&
+					String(this.resumeId || '').trim() === greeting.resumeId)
 			},
 			async loadChatGreeting(limitsMessage, jobId) {
-				const greeting = { limitsMessage, jobId, resumeId: String(this.resumeId || '').trim(),
-					conversationId: this.conversationId, personAccId: this.personAccId, enterpriseAccId: this.enterpriseAccId,
-					customSent: false, textSent: false }
+				const greeting = {
+					limitsMessage,
+					jobId,
+					resumeId: String(this.resumeId || '').trim(),
+					conversationId: this.conversationId,
+					personAccId: this.personAccId,
+					enterpriseAccId: this.enterpriseAccId,
+					customSent: false,
+					textSent: false
+				}
 				if (!greeting.resumeId || !this.isCurrentChatGreeting(greeting)) return
 				// 同一聊天实例保留两条消息的发送进度，重连或重试不能重复发送已经成功的消息。
 				if (this.isCurrentChatGreeting(this._chatGreeting)) return this.sendPendingChatGreeting()
 				try {
 					// 文档 2259：PC 企业端传入当前简历 ResumeId，读取 Chat.ChatButton.Get 的 Greetings。
-					const response = await requestApi({ Name: CHAT_BUTTON_API, Content: { ResumeId: greeting.resumeId } })
+					const response = await requestApi({
+						Name: CHAT_BUTTON_API,
+						Content: {
+							ResumeId: greeting.resumeId
+						}
+					})
 					if (!this.isCurrentChatGreeting(greeting)) return
 					if (!response || Number(response.Code) !== 0) throw new Error('获取默认招呼语失败')
 					const data = typeof response.Data === 'string' ? JSON.parse(response.Data) : response.Data
-					if (!data || typeof data !== 'object' || Array.isArray(data)
-						|| (data.Code !== undefined && Number(data.Code) !== 0)) throw new Error('默认招呼语数据格式不正确')
+					if (!data || typeof data !== 'object' || Array.isArray(data) ||
+						(data.Code !== undefined && Number(data.Code) !== 0)) throw new Error('默认招呼语数据格式不正确')
 					const greetings = data.Greetings !== undefined ? data.Greetings : response.Greetings
 					const greetingText = greetings === undefined || greetings === null ? '' : String(greetings)
 					if (!greetingText.trim()) throw new Error('未获取到默认招呼语 Greetings')
-					this._chatGreeting = { ...greeting, greetingText }
+					this._chatGreeting = {
+						...greeting,
+						greetingText
+					}
 					// 云信尚未登录或正在发送其它消息时暂存，服务恢复后继续，不额外读取历史消息。
 					await this.sendPendingChatGreeting()
 				} catch (error) {
 					// 招呼语请求失败不阻断聊天记录与常用语加载，也不向已关闭或已切换的会话发送消息。
 					if (this.isCurrentChatGreeting(greeting) && this.visible && !this.opening) {
-						uni.showToast({ title: error.message || '获取默认招呼语失败', icon: 'none' })
+						uni.showToast({
+							title: error.message || '获取默认招呼语失败',
+							icon: 'none'
+						})
 					}
 				}
 			},
 			async sendPendingChatGreeting() {
 				if (this._chatGreetingSendPromise) return this._chatGreetingSendPromise
 				const greeting = this._chatGreeting
-				if (!this.isCurrentChatGreeting(greeting) || greeting.textSent || !this.canSendText || !isNimLoggedIn()) return
+				if (!this.isCurrentChatGreeting(greeting) || greeting.textSent || !this.canSendText || !
+					isNimLoggedIn()) return
 				this._chatGreetingSendPromise = (async () => {
 					// 必须先成功发送 { type: 4, data: Limits.Message }；保留 Message 原对象/字符串，不重新解析。
 					if (!greeting.customSent) {
-						const sent = await this.sendNimMessage(nim => nim.V2NIMMessageCreator.createCustomMessage('',
-							JSON.stringify({ type: 4, data: greeting.limitsMessage })), undefined,
+						const sent = await this.sendNimMessage(nim => nim.V2NIMMessageCreator
+							.createCustomMessage('',
+								JSON.stringify({
+									type: 4,
+									data: greeting.limitsMessage
+								})), undefined,
 							() => this.isCurrentChatGreeting(greeting))
 						if (!sent) return
 						greeting.customSent = true
 					}
 					// 自定义消息回执成功后再发送 Greetings 文本，发送期间切换会话时不再继续。
-					if (!this.isCurrentChatGreeting(greeting) || !this.canSendText || !isNimLoggedIn()) return
-					const sent = await this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(maskPhoneNumbers(greeting.greetingText)),
+					if (!this.isCurrentChatGreeting(greeting) || !this.canSendText || !isNimLoggedIn())
+						return
+					const sent = await this.sendNimMessage(nim => nim.V2NIMMessageCreator
+						.createTextMessage(maskPhoneNumbers(greeting.greetingText)),
 						undefined, () => this.isCurrentChatGreeting(greeting))
 					if (sent) greeting.textSent = true
-				})().finally(() => { this._chatGreetingSendPromise = null })
+				})().finally(() => {
+					this._chatGreetingSendPromise = null
+				})
 				return this._chatGreetingSendPromise
 			},
 			prepareConversation() {
@@ -774,8 +1029,10 @@
 				if (document.hidden) return
 				// #endif
 				const conversationId = this.conversationId
-				sendNimP2PReadReceipt(conversationId, this.messages, () => this._alive && this.visible && this.accessReady &&
-					this.conversationId === conversationId && (typeof document === 'undefined' || !document.hidden)).catch(error => {
+				sendNimP2PReadReceipt(conversationId, this.messages, () => this._alive && this.visible && this
+					.accessReady &&
+					this.conversationId === conversationId && (typeof document === 'undefined' || !document.hidden)
+				).catch(error => {
 					console.warn('[PC Chat] 发送已读回执失败', error)
 				})
 				try {
@@ -798,7 +1055,9 @@
 					console.warn('[PC Chat] 获取云信用户资料失败', error)
 				}
 			},
-			profileAvatar(url, fallback) { return !url || this.failedAvatars[url] ? fallback : url },
+			profileAvatar(url, fallback) {
+				return !url || this.failedAvatars[url] ? fallback : url
+			},
 			handleAvatarError(direction) {
 				const url = direction === 'self' ? this.selfAvatar : this.otherAvatar
 				const fallback = direction === 'self' ? DEFAULT_AVATAR : getTalentAvatar(this.otherUser)
@@ -813,17 +1072,18 @@
 				})
 				// 历史、实时和发送回执可能包含相同消息，按 SDK 消息 ID 去重后再排序。
 				this.messages = Array.from(map.values()).sort((a, b) =>
-					(Number(a.createTime) || 0) - (Number(b.createTime) || 0) || messageId(a).localeCompare(messageId(b)))
+					(Number(a.createTime) || 0) - (Number(b.createTime) || 0) || messageId(a).localeCompare(messageId(
+						b)))
 				// 正在播放的语音被撤回、删除或替换后立即停止。
 				if (this.audioActiveId) {
 					const active = this.messages.find(message => messageId(message) === this.audioActiveId)
-					if (!active || active.isRevoked || Number(active.messageType) !== 2
-						|| (active.attachment || {}).url !== this._audioSource) this.stopAudio()
+					if (!active || active.isRevoked || Number(active.messageType) !== 2 ||
+						(active.attachment || {}).url !== this._audioSource) this.stopAudio()
 				}
 			},
 			async loadEarlierMessages(initial = false) {
-				if (!this._alive || !this.accessReady || !isNimLoggedIn() || this.isLoadingHistory
-					|| (!initial && this.historyExhausted)) return
+				if (!this._alive || !this.accessReady || !isNimLoggedIn() || this.isLoadingHistory ||
+					(!initial && this.historyExhausted)) return
 				this.isLoadingHistory = true
 				this.historyError = ''
 				// 分页锚点独立于消息数组：实时/发送消息不会改变下一页历史的起点。
@@ -831,8 +1091,10 @@
 				const hadHistory = Boolean(this._oldestHistoryMessage)
 				try {
 					const list = await getNimInstance().V2NIMMessageService.getMessageList({
-						conversationId: this.conversationId, limit: HISTORY_PAGE_SIZE,
-						anchorMessage: anchor, direction: 0
+						conversationId: this.conversationId,
+						limit: HISTORY_PAGE_SIZE,
+						anchorMessage: anchor,
+						direction: 0
 					})
 					if (!this._alive) return
 					if (!Array.isArray(list)) throw new Error('聊天记录格式不正确')
@@ -864,20 +1126,29 @@
 				if (!current.length) return
 				this.mergeMessages(current)
 				// 隐藏期间可以缓存消息，但不能标已读；返回页面后再统一清除未读。
-				if (this.visible) { this.markRead(); this.scrollToBottom() }
+				if (this.visible) {
+					this.markRead();
+					this.scrollToBottom()
+				}
 			},
 			handleMessageImageLoad() {
 				// 历史分页期间，图片尺寸变化只需回到旧消息锚点；正常聊天仍滚到底部。
 				if (this._historyScrollAnchor) this.scrollToAnchor(this._historyScrollAnchor)
 				else this.scrollToBottom()
 			},
-			messageAnchor(id) { return `pc-msg-${encodeURIComponent(id).replace(/%/g, '_')}` },
+			messageAnchor(id) {
+				return `pc-msg-${encodeURIComponent(id).replace(/%/g, '_')}`
+			},
 			scrollToAnchor(id) {
 				if (id === 'pc-message-bottom') this._historyScrollAnchor = ''
 				this.scrollTarget = ''
-				this.$nextTick(() => { if (this._alive) this.scrollTarget = id })
+				this.$nextTick(() => {
+					if (this._alive) this.scrollTarget = id
+				})
 			},
-			scrollToBottom() { this.scrollToAnchor('pc-message-bottom') },
+			scrollToBottom() {
+				this.scrollToAnchor('pc-message-bottom')
+			},
 			handleInputKeydown(event) {
 				if (event.key !== 'Enter' || this.isComposing || event.isComposing || event.keyCode === 229) return
 				if (event.ctrlKey || event.shiftKey) {
@@ -886,7 +1157,8 @@
 						event.preventDefault()
 						const input = event.target
 						const start = input.selectionStart
-						this.draft = `${this.draft.slice(0, start)}\n${this.draft.slice(input.selectionEnd)}`.slice(0, 2000)
+						this.draft = `${this.draft.slice(0, start)}\n${this.draft.slice(input.selectionEnd)}`.slice(0,
+							2000)
 						this.$nextTick(() => input.setSelectionRange(start + 1, start + 1))
 					}
 					return
@@ -898,7 +1170,10 @@
 				if (!emoji || !emoji.key) return
 				// 按完整 key 插入，不能在字数上限处把 [表情名] 截断，否则两端都无法解析。
 				if (this.draft.length + emoji.key.length > 2000) {
-					uni.showToast({ title: '输入内容不能超过2000字', icon: 'none' })
+					uni.showToast({
+						title: '输入内容不能超过2000字',
+						icon: 'none'
+					})
 					return
 				}
 				this.draft += emoji.key
@@ -947,21 +1222,33 @@
 			},
 			closeMessageContextMenu() {
 				if (!this.messageContextMenu.visible) return
-				this.messageContextMenu = { visible: false, left: 0, top: 0, messageId: '' }
+				this.messageContextMenu = {
+					visible: false,
+					left: 0,
+					top: 0,
+					messageId: ''
+				}
 			},
 			reEditMessage(message) {
 				const rawMessage = this.findRawMessage(message)
-				const messageTime = Number(message && message.timestamp) || Number(rawMessage && rawMessage.createTime) || 0
+				const messageTime = Number(message && message.timestamp) || Number(rawMessage && rawMessage.createTime) ||
+					0
 				if (!messageTime || Date.now() - messageTime > MESSAGE_REEDIT_LIMIT) {
-					uni.showToast({ title: MESSAGE_REEDIT_EXPIRED_MESSAGE, icon: 'none' })
+					uni.showToast({
+						title: MESSAGE_REEDIT_EXPIRED_MESSAGE,
+						icon: 'none'
+					})
 					return
 				}
 
 				const originalText = message && message.originalText !== undefined ?
 					String(message.originalText) : rawMessage && rawMessage.revokedText !== undefined ?
-						String(rawMessage.revokedText) : String(rawMessage && rawMessage.text || '')
+					String(rawMessage.revokedText) : String(rawMessage && rawMessage.text || '')
 				if (!originalText) {
-					uni.showToast({ title: '未获取到原消息内容', icon: 'none' })
+					uni.showToast({
+						title: '未获取到原消息内容',
+						icon: 'none'
+					})
 					return
 				}
 
@@ -1009,7 +1296,10 @@
 				if (!isSelf || rawMessage.isRevoked || !this.isTextMessage(rawMessage)) return
 				const messageService = getNimInstance().V2NIMMessageService
 				if (!messageService || typeof messageService.revokeMessage !== 'function') {
-					uni.showToast({ title: '当前聊天服务不支持撤回消息', icon: 'none' })
+					uni.showToast({
+						title: '当前聊天服务不支持撤回消息',
+						icon: 'none'
+					})
 					return
 				}
 
@@ -1020,7 +1310,10 @@
 					if (!this._alive || this.conversationId !== conversationId) return
 					this.markMessageAsRevoked(rawMessage)
 					this.$emit('changed')
-					if (this.visible && !this.opening) uni.showToast({ title: '消息已撤回', icon: 'none' })
+					if (this.visible && !this.opening) uni.showToast({
+						title: '消息已撤回',
+						icon: 'none'
+					})
 				} catch (error) {
 					if (this._alive && this.conversationId === conversationId && this.visible && !this.opening) {
 						uni.showToast({
@@ -1053,7 +1346,8 @@
 				this.emitAction(key, label)
 			},
 			async loadBlockStatus() {
-				if (!this._alive || !this.visible || this.opening || this.isCheckingBlockStatus || this.isUpdatingBlockStatus) return false
+				if (!this._alive || !this.visible || this.opening || this.isCheckingBlockStatus || this
+					.isUpdatingBlockStatus) return false
 				const personAccId = this.personAccId
 				this.isCheckingBlockStatus = true
 				this.blockStatusLoaded = false
@@ -1087,13 +1381,20 @@
 			},
 			async handleMessagePermissionAction() {
 				// 查询与写入共用入口锁；切换会话期间不能操作仍显示着的旧人才面板。
-				if (!this._alive || !this.visible || this.opening || this.isCheckingBlockStatus || this.isUpdatingBlockStatus) return
+				if (!this._alive || !this.visible || this.opening || this.isCheckingBlockStatus || this
+					.isUpdatingBlockStatus) return
 				if (!this.accessReady) {
-					uni.showToast({ title: this.isCheckingAccess ? '沟通信息加载中，请稍候' : '沟通权限尚未就绪', icon: 'none' })
+					uni.showToast({
+						title: this.isCheckingAccess ? '沟通信息加载中，请稍候' : '沟通权限尚未就绪',
+						icon: 'none'
+					})
 					return
 				}
 				if (!this.personAccId || !isNimLoggedIn()) {
-					uni.showToast({ title: !this.personAccId ? '未获取到聊天对象账号' : '聊天服务尚未就绪', icon: 'none' })
+					uni.showToast({
+						title: !this.personAccId ? '未获取到聊天对象账号' : '聊天服务尚未就绪',
+						icon: 'none'
+					})
 					return
 				}
 				// 首次查询或查询失败后的点击只重试查询，用户确认新文案后再点击执行操作。
@@ -1113,14 +1414,20 @@
 					this.isOtherBlocked = !shouldRemoveFromBlockList
 					this.closeComposerPanels()
 					if (this.visible && !this.opening) {
-						uni.showToast({ title: shouldRemoveFromBlockList ? '取消屏蔽成功' : '屏蔽成功', icon: 'success' })
+						uni.showToast({
+							title: shouldRemoveFromBlockList ? '取消屏蔽成功' : '屏蔽成功',
+							icon: 'success'
+						})
 					}
 				} catch (error) {
 					console.warn('[PC Chat] 更新用户云信黑名单状态失败', error)
 					// 父页为每个会话创建独立面板；旧请求完成后不能更新新会话，也不能弹出过期提示。
 					if (this._alive && this.personAccId === personAccId && this.visible && !this.opening) {
-						uni.showToast({ title: error && error.message ? error.message
-							: shouldRemoveFromBlockList ? '取消屏蔽失败' : '屏蔽失败', icon: 'none' })
+						uni.showToast({
+							title: error && error.message ? error.message : shouldRemoveFromBlockList ?
+								'取消屏蔽失败' : '屏蔽失败',
+							icon: 'none'
+						})
 					}
 				} finally {
 					if (this._alive && this.personAccId === personAccId) this.isUpdatingBlockStatus = false
@@ -1152,23 +1459,37 @@
 				this.jobListError = ''
 				try {
 					// 职位切换固定读取首批 50 条，接口字段 pageSize 按服务端约定保留小写 S。
-					const response = await requestApi({ Name: JOB_LIST_GET_API, Content: { Start: 0, pageSize: 50 } })
+					const response = await requestApi({
+						Name: JOB_LIST_GET_API,
+						Content: {
+							Start: 0,
+							pageSize: 50
+						}
+					})
 					if (!this._alive) return
 					if (!response || Number(response.Code) !== 0) throw new Error('获取职位列表失败')
 					let data = response.Data
 					if (typeof data === 'string') data = JSON.parse(data)
-					if (Array.isArray(data)) data = { Rows: data }
+					if (Array.isArray(data)) data = {
+						Rows: data
+					}
 					if (!data || typeof data !== 'object') data = response
 					if (data.Code !== undefined && Number(data.Code) !== 0) throw new Error('获取职位列表失败')
 					const rows = Array.isArray(data.Rows) ? data.Rows : Array.isArray(data.List) ? data.List :
 						(Array.isArray(response.Rows) ? response.Rows : [])
 					this.jobList = rows.map((item, index) => {
-						const name = responseValue(item, ['JobName', 'Name', 'PositionName', 'Title']) || '未命名职位'
-						const location = responseValue(item, ['Location', 'JobLocation', 'WorkLocation', 'Address', 'Area']) || '-'
+						const name = responseValue(item, ['JobName', 'Name', 'PositionName', 'Title']) ||
+							'未命名职位'
+						const location = responseValue(item, ['Location', 'JobLocation', 'WorkLocation',
+							'Address', 'Area'
+						]) || '-'
 						const salary = responseValue(item, ['Salary', 'SalaryText', 'Pay']) || '-'
 						return {
 							key: responseValue(item, ['JobId', 'Id', 'ID']) || `job-${index}`,
-							jobId: responseValue(item, ['JobId', 'Id', 'ID']), name, location, salary
+							jobId: responseValue(item, ['JobId', 'Id', 'ID']),
+							name,
+							location,
+							salary
 						}
 					})
 				} catch (error) {
@@ -1184,27 +1505,39 @@
 				const targetJobId = responseValue(job, ['jobId', 'JobId', 'id', 'Id'])
 				if (!targetJobId) return
 				// Limits 提示切换时，旧职位使用接口返回值，不能把页面职位误判为已经切换成功。
-				const previousJobId = options.previousJobId === undefined || options.previousJobId === null
-					? String(this.jobId || '').trim() : String(options.previousJobId).trim()
+				const previousJobId = options.previousJobId === undefined || options.previousJobId === null ?
+					String(this.jobId || '').trim() : String(options.previousJobId).trim()
 				if (targetJobId === previousJobId) {
 					this.closeJobPicker()
-					uni.showToast({ title: '该职位是当前沟通职位，无需切换', icon: 'none' })
+					uni.showToast({
+						title: '该职位是当前沟通职位，无需切换',
+						icon: 'none'
+					})
 					return
 				}
 				if (!this.accessReady || !this.personAccId || !this.enterpriseAccId || !this.conversationId) {
-					uni.showToast({ title: '沟通信息尚未就绪', icon: 'none' })
+					uni.showToast({
+						title: '沟通信息尚未就绪',
+						icon: 'none'
+					})
 					return
 				}
 
+				const conversationId = this.conversationId
 				this.isSwitchingJob = true
 				let switchedJob = null
 				let enterprise = null
 				try {
 					// 职位切换接口由移动端共用：成功返回 Enterprise 后，再通知云信双方更新职位上下文。
-					const response = await requestApi({ Name: CHANGE_CHAT_JOB_API, Content: {
-						PersonAccId: this.personAccId, EnterpriseAccId: this.enterpriseAccId,
-						JobId: targetJobId, IsMessage: true
-					} })
+					const response = await requestApi({
+						Name: CHANGE_CHAT_JOB_API,
+						Content: {
+							PersonAccId: this.personAccId,
+							EnterpriseAccId: this.enterpriseAccId,
+							JobId: targetJobId,
+							IsMessage: true
+						}
+					})
 					if (!this._alive) return
 					if (!response || Number(response.Code) !== 0) throw new Error('切换聊天职位失败')
 					let data = response.Data
@@ -1217,7 +1550,9 @@
 						...job,
 						jobId: responseValue(enterprise, ['JobId', 'Id', 'ID']) || targetJobId,
 						name: responseValue(enterprise, ['JobName', 'Name', 'PositionName', 'Title']) || job.name,
-						location: responseValue(enterprise, ['Location', 'JobLocation', 'WorkLocation', 'Address', 'Area']) || job.location,
+						location: responseValue(enterprise, ['Location', 'JobLocation', 'WorkLocation', 'Address',
+							'Area'
+						]) || job.location,
 						salary: responseValue(enterprise, ['Salary', 'SalaryText', 'Pay']) || job.salary
 					}
 
@@ -1230,7 +1565,14 @@
 						throw new Error('当前聊天服务不支持发送自定义消息')
 					}
 					// 切换成功后发送固定业务消息体，data 必须是接口返回的 Enterprise 原对象。
-					const customMessage = messageCreator.createCustomMessage('', JSON.stringify({ type: 5, data: enterprise }))
+					const customMessage = messageCreator.createCustomMessage('', JSON.stringify({
+						type: 5,
+						data: enterprise
+					}))
+					const canSend = await this.checkChatLimitsBeforeSend(targetJobId, this.resumeId,
+						() => this._alive && this.visible && !this.opening && this.conversationId ===
+						conversationId)
+					if (!canSend) return
 					const result = await messageService.sendMessage(customMessage, this.conversationId)
 					if (!result || !result.message) throw new Error('职位切换自定义消息发送失败')
 					if (!this._alive) return
@@ -1239,8 +1581,11 @@
 					this.scrollToBottom()
 					this.$emit('changed')
 				} catch (error) {
-					if (this._alive) uni.showToast({ title: switchedJob
-						? '职位已切换，但消息发送失败' : error.message || '切换聊天职位失败', icon: 'none' })
+					if (this._alive) uni.showToast({
+						title: switchedJob ?
+							'职位已切换，但消息发送失败' : error.message || '切换聊天职位失败',
+						icon: 'none'
+					})
 				} finally {
 					if (this._alive) {
 						this.isSwitchingJob = false
@@ -1248,8 +1593,15 @@
 							// 业务切换已成功，即便云信发送失败也要同步当前职位，避免显示旧状态。
 							this.jobName = switchedJob.name || this.jobName
 							this.closeJobPicker()
-							this.$emit('action', { key: 'job-switched', label: '选择职位', job: switchedJob,
-								enterprise, jobId: targetJobId, previousJobId, conversationId: this.conversationId })
+							this.$emit('action', {
+								key: 'job-switched',
+								label: '选择职位',
+								job: switchedJob,
+								enterprise,
+								jobId: targetJobId,
+								previousJobId,
+								conversationId: this.conversationId
+							})
 						}
 					}
 				}
@@ -1259,7 +1611,10 @@
 				this.isLoadingCommonPhrases = true
 				this.commonPhrasesError = ''
 				try {
-					const response = await requestApi({ Name: COMMON_LANGUAGE_GET_API, Content: '' })
+					const response = await requestApi({
+						Name: COMMON_LANGUAGE_GET_API,
+						Content: ''
+					})
 					if (!this._alive) return
 					if (!response || Number(response.Code) !== 0) throw new Error('获取常用语失败')
 					const data = typeof response.Data === 'string' ? JSON.parse(response.Data) : response.Data
@@ -1269,12 +1624,17 @@
 					this.commonPhrases = data.Rows.map((item, index) => {
 						const message = item && typeof item.Msg === 'string' ? item.Msg.trim() : ''
 						if (!message) return null
-						return { id: item.Id ? String(item.Id) : null,
-							key: item.Id ? String(item.Id) : `phrase-${index}`, message,
+						return {
+							id: item.Id ? String(item.Id) : null,
+							key: item.Id ? String(item.Id) : `phrase-${index}`,
+							message,
 							displayMessage: message.replace(/\s*(?:\\+[rn]|[\r\n\u2028\u2029])+\s*/g, ' '),
-							isTop: Boolean(item.IsTop), originalIndex: index }
+							isTop: Boolean(item.IsTop),
+							originalIndex: index
+						}
 					}).filter(Boolean).sort((left, right) =>
-						left.isTop !== right.isTop ? (left.isTop ? -1 : 1) : left.originalIndex - right.originalIndex)
+						left.isTop !== right.isTop ? (left.isTop ? -1 : 1) : left.originalIndex - right
+						.originalIndex)
 					this.commonPhrasesLoaded = true
 				} catch (error) {
 					if (!this._alive) return
@@ -1303,7 +1663,8 @@
 			async sendTextMessage(text, draftSnapshot) {
 				if (typeof text !== 'string' || !text.trim()) return false
 				// 文本、表情和常用语都交给统一发送入口，不单独绕过黑名单查询。
-				return this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(maskPhoneNumbers(text.trim())), draftSnapshot)
+				return this.sendNimMessage(nim => nim.V2NIMMessageCreator.createTextMessage(maskPhoneNumbers(text
+					.trim())), draftSnapshot)
 			},
 			async checkOtherBlockedBeforeSend(nim, personAccId) {
 				const conversationId = this.conversationId
@@ -1318,9 +1679,14 @@
 						throw new Error('黑名单状态查询结果格式不正确')
 					}
 					const isBlocked = blockStatus[personAccId]
-					if (isBlocked && this._alive && this.visible && !this.opening && this.accessReady && isNimLoggedIn() &&
+					if (isBlocked && this._alive && this.visible && !this.opening && this.accessReady &&
+						isNimLoggedIn() &&
 						this.personAccId === personAccId && this.conversationId === conversationId) {
-						uni.showToast({ title: BLOCKED_USER_SEND_WARNING, icon: 'none', duration: 2500 })
+						uni.showToast({
+							title: BLOCKED_USER_SEND_WARNING,
+							icon: 'none',
+							duration: 2500
+						})
 					}
 					return isBlocked
 				} catch (error) {
@@ -1333,7 +1699,10 @@
 				// 与消息类型无关的发送入口：统一查询、发送锁、错误码提示和成功回执处理。
 				if (!this._alive || !this.canSendText || typeof createMessage !== 'function') return false
 				if (!this.conversationId || !isNimLoggedIn()) {
-					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					uni.showToast({
+						title: '聊天服务尚未就绪',
+						icon: 'none'
+					})
 					return false
 				}
 				const conversationId = this.conversationId
@@ -1341,6 +1710,12 @@
 				this.isSending = true
 				try {
 					const nim = getNimInstance()
+					const jobId = this.jobId
+					const resumeId = this.resumeId
+					const canSend = await this.checkChatLimitsBeforeSend(jobId, resumeId, () => isCurrent() &&
+						String(this.jobId || '') === String(jobId || '') && String(this.resumeId || '') === String(
+							resumeId || ''))
+					if (!canSend) return false
 					await this.checkOtherBlockedBeforeSend(nim, personAccId)
 					// 查询期间可能切换会话或关闭页面，不能在旧面板查询完成后继续发消息。
 					if (!isCurrent() || !this._alive || !this.visible || this.opening || !this.accessReady ||
@@ -1353,14 +1728,29 @@
 					if (draftSnapshot !== undefined && this.drafts[conversationId] === draftSnapshot) {
 						this.$set(this.drafts, conversationId, '')
 					}
-					if (!this._alive || this.conversationId !== conversationId || this.personAccId !== personAccId) return true
+					if (!this._alive || this.conversationId !== conversationId || this.personAccId !== personAccId)
+						return true
 					this.mergeMessages([result.message])
 					this.scrollToBottom()
 					this.$emit('changed')
 					return true
 				} catch (error) {
 					if (this._alive && this.visible && !this.opening && this.conversationId === conversationId &&
-						this.personAccId === personAccId) uni.showToast({ title: getSendFailureMessage(error), icon: 'none' })
+						this.personAccId === personAccId) {
+						if (getSendFailureMessage(error) == TALENT_BLOCKED_SEND_MESSAGE) {
+							uni.showModal({
+								title: '提示',
+								content: getSendFailureMessage(error),
+								confirmText: '知道了',
+								success: result => {}
+							})
+						} else {
+							uni.showToast({
+								title: getSendFailureMessage(error),
+								icon: 'none'
+							})
+						}
+					}
 					return false
 				} finally {
 					if (this._alive) {
@@ -1373,15 +1763,24 @@
 			async togglePinned() {
 				if (!this._alive || !this.visible || this.isPinning || this.opening) return
 				if (!this.accessReady) {
-					uni.showToast({ title: this.isCheckingAccess ? '沟通信息加载中，请稍候' : '沟通权限尚未就绪', icon: 'none' })
+					uni.showToast({
+						title: this.isCheckingAccess ? '沟通信息加载中，请稍候' : '沟通权限尚未就绪',
+						icon: 'none'
+					})
 					return
 				}
 				if (!this.personAccId || !this.enterpriseAccId) {
-					uni.showToast({ title: '未获取到会话账号信息', icon: 'none' })
+					uni.showToast({
+						title: '未获取到会话账号信息',
+						icon: 'none'
+					})
 					return
 				}
 				if (!this.conversationId || !isNimLoggedIn()) {
-					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					uni.showToast({
+						title: '聊天服务尚未就绪',
+						icon: 'none'
+					})
 					return
 				}
 				const conversationId = this.conversationId
@@ -1391,19 +1790,29 @@
 				this.isPinning = true
 				try {
 					// PC 企业端仍按双方身份传参；先保存业务状态，失败时不调用云信或提前更改界面。
-					const response = await requestApi({ Name: 'Chat.Chat.Save', Content: {
-						PersonAccId: this.personAccId, EnterpriseAccId: this.enterpriseAccId, IsTop: value
-					} })
+					const response = await requestApi({
+						Name: 'Chat.Chat.Save',
+						Content: {
+							PersonAccId: this.personAccId,
+							EnterpriseAccId: this.enterpriseAccId,
+							IsTop: value
+						}
+					})
 					const responseCode = response && response.Code !== undefined ? Number(response.Code) : NaN
 					if (responseCode !== 0) {
 						if (responseCode === 4400002) throw new Error('置顶数量已达上限')
-						throw new Error(`更新置顶状态失败，业务错误码：${response && response.Code !== undefined ? response.Code : 'unknown'}`)
+						throw new Error(
+							`更新置顶状态失败，业务错误码：${response && response.Code !== undefined ? response.Code : 'unknown'}`
+						)
 					}
 					// Save 可不返回 Data，空字符串同样视为空对象；非空 JSON 必须是合法对象。
 					let data = response.Data
 					if (typeof data === 'string') {
-						try { data = data.trim() ? JSON.parse(data) : {} }
-						catch (error) { throw new Error('保存会话接口返回的数据格式不正确') }
+						try {
+							data = data.trim() ? JSON.parse(data) : {}
+						} catch (error) {
+							throw new Error('保存会话接口返回的数据格式不正确')
+						}
 					}
 					data = data === undefined || data === null ? {} : data
 					if (typeof data !== 'object' || Array.isArray(data)) throw new Error('保存会话接口返回的数据格式不正确')
@@ -1416,7 +1825,10 @@
 					saved = true
 					if (this._alive) {
 						this.isPinned = value
-						this.$emit('pin-changed', { conversationId, isPinned: value })
+						this.$emit('pin-changed', {
+							conversationId,
+							isPinned: value
+						})
 					}
 					const conversationService = getNimInstance().V2NIMLocalConversationService
 					if (!conversationService || typeof conversationService.stickTopConversation !== 'function') {
@@ -1432,10 +1844,16 @@
 				} finally {
 					if (this._alive) this.isPinning = false
 				}
-				if (this._alive && this.visible && toastTitle) uni.showToast({ title: toastTitle, icon: 'none' })
+				if (this._alive && this.visible && toastTitle) uni.showToast({
+					title: toastTitle,
+					icon: 'none'
+				})
 			},
 			previewImage(url) {
-				uni.previewImage({ current: url, urls: this.displayMessages.filter(row => row.type === 'image').map(row => row.url) })
+				uni.previewImage({
+					current: url,
+					urls: this.displayMessages.filter(row => row.type === 'image').map(row => row.url)
+				})
 			},
 			audioButtonLabel(message) {
 				const duration = message.durationSeconds ? `，${message.durationSeconds}秒` : ''
@@ -1446,9 +1864,19 @@
 				if (!this._alive || !this.visible || this.opening) return
 				if (!this._audioController) {
 					this._audioController = createPcAudioPlayer({
-						onState: (id, state) => { this.audioActiveId = id; this.audioState = state },
-						onDuration: (id, seconds) => { if (this._alive) this.$set(this.audioDurations, id, seconds) },
-						onError: title => { if (this._alive && this.visible) uni.showToast({ title, icon: 'none' }) }
+						onState: (id, state) => {
+							this.audioActiveId = id;
+							this.audioState = state
+						},
+						onDuration: (id, seconds) => {
+							if (this._alive) this.$set(this.audioDurations, id, seconds)
+						},
+						onError: title => {
+							if (this._alive && this.visible) uni.showToast({
+								title,
+								icon: 'none'
+							})
+						}
 					})
 				}
 				this._audioSource = message.url
@@ -1463,180 +1891,1014 @@
 				if (key === 'switch-job') return this.switchJob()
 				if (key === 'publish-job') this.closeJobPicker()
 				// 所有业务操作统一携带当前职位与简历，后续接入页面时无需重新猜测对应关系。
-				this.$emit('action', { key, label, jobId: this.jobId, resumeId: this.resumeId,
-					personAccId: this.personAccId, enterpriseAccId: this.enterpriseAccId, chatByQRcode: this.detail.chatByQRcode })
+				this.$emit('action', {
+					key,
+					label,
+					jobId: this.jobId,
+					resumeId: this.resumeId,
+					personAccId: this.personAccId,
+					enterpriseAccId: this.enterpriseAccId,
+					chatByQRcode: this.detail.chatByQRcode
+				})
 			}
 		}
 	}
 </script>
 
 <style lang="scss" scoped>
-	.chat-panel { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
-	.job-picker-mask { position: fixed; z-index: 20; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center;
-		justify-content: center; background: rgba(0, 0, 0, .28); }
-	.job-picker { box-sizing: border-box; width: min(520px, calc(100vw - 48px)); max-height: min(520px, calc(100vh - 48px));
-		padding: 0 20px 20px; overflow: hidden; background: #fff; border-radius: 4px; box-shadow: 0 8px 28px rgba(0, 0, 0, .18); }
-	.job-picker-header { display: flex; align-items: center; min-height: 58px; border-bottom: 1px solid #edf0f3; }
-	.job-picker-title { flex: 1; min-width: 0; font-size: 16px; color: #30353a; }
-	.job-picker-close { flex: 0 0 28px; width: 28px; height: 28px; padding: 0; margin-left: 12px; border: 0; font-size: 24px;
-		line-height: 26px; color: #9ca4ab; background: transparent; cursor: pointer; }
-	.job-picker-close:hover { color: #4c555d; }
-	.job-picker-state { padding: 36px 0; text-align: center; font-size: 14px; color: #929ba4; }
-	.job-picker-state--error { color: #c65d5d; }
-	.job-picker-empty { display: flex; align-items: center; flex-direction: column; padding: 42px 0 28px; font-size: 14px; color: #7d8790; }
-	.job-publish-button { min-width: 96px; height: 34px; padding: 0 18px; margin-top: 22px; border: 0; border-radius: 3px; font-size: 14px;
-		color: #fff; background: #f37324; cursor: pointer; }
-	.job-picker-list { max-height: 400px; }
-	.job-picker-item { display: flex; align-items: center; justify-content: space-between; box-sizing: border-box; width: 100%; min-height: 64px;
-		padding: 10px 4px; border: 0; border-bottom: 1px solid #f0f2f4; text-align: left; background: #fff; cursor: pointer; &::after { border: 0; } }
-	.job-picker-item:hover { background: #fff6f0; }
-	.job-picker-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #333b42; }
-	.job-picker-item-detail { flex: 0 0 auto; max-width: 58%; margin-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #7d8790; }
-	.chat-panel-header { position: relative; display: flex; align-items: center; flex: 0 0 49px; box-sizing: border-box;
-		padding: 0 18px; border-bottom: 1px solid #eceff1; }
-	.job-context { display: flex; align-items: center; max-width: 46%; font-size: 12px; color: #929ba4; }
-	.job-name { max-width: 155px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.action-link { flex-shrink: 0; margin-left: 8px; font-size: 12px; color: #f37324; cursor: pointer; }
-	.chat-title { position: absolute; left: 56%; max-width: 25%; overflow: hidden; text-overflow: ellipsis;
-		white-space: nowrap; font-size: 16px; color: #666; transform: translateX(-50%); }
-	.resume-link { margin-left: auto; }
-	.message-scroll { flex: 1; height: 0; min-height: 0; }
-	.message-content { box-sizing: border-box; padding: 20px 24px 0; }
-	.history-state, .message-state, .time-divider { text-align: center; font-size: 12px; line-height: 20px; color: #a1a6aa; }
-	.history-state { padding-bottom: 4px; cursor: pointer; }
-	.message-state { padding: 22px 0; }
-	.message-state--error { color: #f37324; cursor: pointer; }
-	.time-divider { margin: 20px 0; }
-	.revoked-message { display: flex; align-items: center; justify-content: center; }
-	.revoked-message-edit { margin-left: 8px; color: #f37324; cursor: pointer; &:hover { text-decoration: underline; } }
-	.message-row { display: flex; align-items: flex-start; margin-bottom: 16px;
-		&.self { flex-direction: row-reverse;
-			.message-avatar { margin: 0 0 0 14px; }
-			.message-bubble { background: #fff1e8; }
-		.message-bubble::before { left: auto; right: -6px; border-left: 6px solid #fff1e8; border-right: 0; } } }
-	.message-row--person-card { display: block; }
-	.person-message-card { box-sizing: border-box; width: 100%; min-height: 102px; padding: 16px 14px;
-		border: 1px solid #f1f2f3; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .05); cursor: pointer; }
-	.person-message-name { display: block; overflow: hidden; font-size: 16px; line-height: 24px; color: #f37324;
-		text-overflow: ellipsis; white-space: nowrap; }
-	.person-message-meta, .person-message-intention { display: flex; align-items: center; flex-wrap: wrap; min-width: 0;
-		font-size: 14px; line-height: 22px; color: #65717b; }
-	.person-message-meta { margin-top: 4px; }
-	.person-message-meta-item { display: inline-flex; align-items: center; white-space: nowrap;
-		& + .person-message-meta-item { margin-left: 10px; padding-left: 10px; border-left: 1px solid #e5e8eb; } }
-	.person-message-intention { gap: 18px; margin-top: 4px; }
-	.person-message-intention-item { display: inline-flex; align-items: center; min-width: 0; white-space: nowrap; }
-	.person-message-icon { flex: 0 0 15px; width: 15px; height: 15px; margin-right: 5px; opacity: .7; }
-	.message-avatar { flex: 0 0 44px; width: 44px; height: 44px; margin-right: 14px; border-radius: 50%; }
-	.message-bubble { position: relative; box-sizing: border-box; max-width: 66%; min-height: 42px;
-		margin-top: 4px; padding: 11px 16px; border-radius: 4px; font-size: 14px; line-height: 21px;
-		color: #65717b; background: #edf0f2; white-space: pre-wrap; overflow-wrap: anywhere;
-		&::before { position: absolute; top: 12px; left: -6px; width: 0; height: 0; content: '';
-			border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-right: 6px solid #edf0f2; } }
-	.message-bubble--image { padding: 5px; cursor: pointer; }
-	.message-bubble--text { padding-top: 8px; padding-bottom: 8px; }
+	.chat-panel {
+		display: flex;
+		flex-direction: column;
+		width: 100%;
+		height: 100%;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.job-picker-mask {
+		position: fixed;
+		z-index: 20;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(0, 0, 0, .28);
+	}
+
+	.job-picker {
+		box-sizing: border-box;
+		width: min(520px, calc(100vw - 48px));
+		max-height: min(520px, calc(100vh - 48px));
+		padding: 0 20px 20px;
+		overflow: hidden;
+		background: #fff;
+		border-radius: 4px;
+		box-shadow: 0 8px 28px rgba(0, 0, 0, .18);
+	}
+
+	.job-picker-header {
+		display: flex;
+		align-items: center;
+		min-height: 58px;
+		border-bottom: 1px solid #edf0f3;
+	}
+
+	.job-picker-title {
+		flex: 1;
+		min-width: 0;
+		font-size: 16px;
+		color: #30353a;
+	}
+
+	.job-picker-close {
+		flex: 0 0 28px;
+		width: 28px;
+		height: 28px;
+		padding: 0;
+		margin-left: 12px;
+		border: 0;
+		font-size: 24px;
+		line-height: 26px;
+		color: #9ca4ab;
+		background: transparent;
+		cursor: pointer;
+	}
+
+	.job-picker-close:hover {
+		color: #4c555d;
+	}
+
+	.job-picker-state {
+		padding: 36px 0;
+		text-align: center;
+		font-size: 14px;
+		color: #929ba4;
+	}
+
+	.job-picker-state--error {
+		color: #c65d5d;
+	}
+
+	.job-picker-empty {
+		display: flex;
+		align-items: center;
+		flex-direction: column;
+		padding: 42px 0 28px;
+		font-size: 14px;
+		color: #7d8790;
+	}
+
+	.job-publish-button {
+		min-width: 96px;
+		height: 34px;
+		padding: 0 18px;
+		margin-top: 22px;
+		border: 0;
+		border-radius: 3px;
+		font-size: 14px;
+		color: #fff;
+		background: #f37324;
+		cursor: pointer;
+	}
+
+	.job-picker-list {
+		max-height: 400px;
+	}
+
+	.job-picker-item {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		box-sizing: border-box;
+		width: 100%;
+		min-height: 64px;
+		padding: 10px 4px;
+		border: 0;
+		border-bottom: 1px solid #f0f2f4;
+		text-align: left;
+		background: #fff;
+		cursor: pointer;
+
+		&::after {
+			border: 0;
+		}
+	}
+
+	.job-picker-item:hover {
+		background: #fff6f0;
+	}
+
+	.job-picker-item-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 14px;
+		color: #333b42;
+	}
+
+	.job-picker-item-detail {
+		flex: 0 0 auto;
+		max-width: 58%;
+		margin-left: 16px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 13px;
+		color: #7d8790;
+	}
+
+	.chat-panel-header {
+		position: relative;
+		display: flex;
+		align-items: center;
+		flex: 0 0 49px;
+		box-sizing: border-box;
+		padding: 0 18px;
+		border-bottom: 1px solid #eceff1;
+	}
+
+	.job-context {
+		display: flex;
+		align-items: center;
+		max-width: 46%;
+		font-size: 12px;
+		color: #929ba4;
+	}
+
+	.job-name {
+		max-width: 155px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.action-link {
+		flex-shrink: 0;
+		margin-left: 8px;
+		font-size: 12px;
+		color: #f37324;
+		cursor: pointer;
+	}
+
+	.chat-title {
+		position: absolute;
+		left: 56%;
+		max-width: 25%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 16px;
+		color: #666;
+		transform: translateX(-50%);
+	}
+
+	.resume-link {
+		margin-left: auto;
+	}
+
+	.message-scroll {
+		flex: 1;
+		height: 0;
+		min-height: 0;
+	}
+
+	.message-content {
+		box-sizing: border-box;
+		padding: 20px 24px 0;
+	}
+
+	.history-state,
+	.message-state,
+	.time-divider {
+		text-align: center;
+		font-size: 12px;
+		line-height: 20px;
+		color: #a1a6aa;
+	}
+
+	.history-state {
+		padding-bottom: 4px;
+		cursor: pointer;
+	}
+
+	.message-state {
+		padding: 22px 0;
+	}
+
+	.message-state--error {
+		color: #f37324;
+		cursor: pointer;
+	}
+
+	.time-divider {
+		margin: 20px 0;
+	}
+
+	.revoked-message {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.revoked-message-edit {
+		margin-left: 8px;
+		color: #f37324;
+		cursor: pointer;
+
+		&:hover {
+			text-decoration: underline;
+		}
+	}
+
+	.message-row {
+		display: flex;
+		align-items: flex-start;
+		margin-bottom: 16px;
+
+		&.self {
+			flex-direction: row-reverse;
+
+			.message-avatar {
+				margin: 0 0 0 14px;
+			}
+
+			.message-bubble {
+				background: #fff1e8;
+			}
+
+			.message-bubble::before {
+				left: auto;
+				right: -6px;
+				border-left: 6px solid #fff1e8;
+				border-right: 0;
+			}
+		}
+	}
+
+	.message-row--person-card {
+		display: block;
+	}
+
+	.person-message-card {
+		box-sizing: border-box;
+		width: 100%;
+		min-height: 102px;
+		padding: 16px 14px;
+		border: 1px solid #f1f2f3;
+		background: #fff;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, .05);
+		cursor: pointer;
+	}
+
+	.person-message-name {
+		display: block;
+		overflow: hidden;
+		font-size: 16px;
+		line-height: 24px;
+		color: #f37324;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.person-message-meta,
+	.person-message-intention {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		min-width: 0;
+		font-size: 14px;
+		line-height: 22px;
+		color: #65717b;
+	}
+
+	.person-message-meta {
+		margin-top: 4px;
+	}
+
+	.person-message-meta-item {
+		display: inline-flex;
+		align-items: center;
+		white-space: nowrap;
+
+		&+.person-message-meta-item {
+			margin-left: 10px;
+			padding-left: 10px;
+			border-left: 1px solid #e5e8eb;
+		}
+	}
+
+	.person-message-intention {
+		gap: 18px;
+		margin-top: 4px;
+	}
+
+	.person-message-intention-item {
+		display: inline-flex;
+		align-items: center;
+		min-width: 0;
+		white-space: nowrap;
+	}
+
+	.person-message-icon {
+		flex: 0 0 15px;
+		width: 15px;
+		height: 15px;
+		margin-right: 5px;
+		opacity: .7;
+	}
+
+	.message-avatar {
+		flex: 0 0 44px;
+		width: 44px;
+		height: 44px;
+		margin-right: 14px;
+		border-radius: 50%;
+	}
+
+	.message-bubble {
+		position: relative;
+		box-sizing: border-box;
+		max-width: 66%;
+		min-height: 42px;
+		margin-top: 4px;
+		padding: 11px 16px;
+		border-radius: 4px;
+		font-size: 14px;
+		line-height: 21px;
+		color: #65717b;
+		background: #edf0f2;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+
+		&::before {
+			position: absolute;
+			top: 12px;
+			left: -6px;
+			width: 0;
+			height: 0;
+			content: '';
+			border-top: 6px solid transparent;
+			border-bottom: 6px solid transparent;
+			border-right: 6px solid #edf0f2;
+		}
+	}
+
+	.message-bubble--image {
+		padding: 5px;
+		cursor: pointer;
+	}
+
+	.message-bubble--text {
+		padding-top: 8px;
+		padding-bottom: 8px;
+	}
+
 	// 使用行内文本流，避免 flex 把表情之间的换行限制在某个文本片段内。
-	.message-text { max-width: 100%; }
-	.message-text-copy { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
-	.message-emoji { display: inline-block; width: 28px; height: 28px; margin: 0 2px; vertical-align: middle; }
-	.message-bubble--audio { display: flex; align-items: center; flex: 0 1 auto; height: 44px; min-width: 120px;
-		margin-right: 0; margin-left: 0; border: 0; text-align: left; cursor: pointer;
-		&::after { border: 0; }
-		&:hover { filter: brightness(.97); }
-		&:focus-visible { outline: 2px solid #f37324; outline-offset: 3px; }
-		&.audio-active { color: #f37324; } }
-	.audio-indicator { display: flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; }
-	.audio-play-icon { font-family: Arial, sans-serif; font-size: 14px; line-height: 20px; }
-	.audio-spinner { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid #f0c7ad;
-		border-top-color: #f37324; border-radius: 50%; animation: audio-spin .8s linear infinite; }
-	.audio-waveform { display: flex; align-items: center; flex: 0 0 25px; height: 20px; margin-left: 8px;
-		.audio-wave-bar { width: 3px; height: 8px; margin-right: 2px; border-radius: 1px; background: currentColor; }
-		.audio-wave-bar:nth-child(2), .audio-wave-bar:nth-child(4) { height: 14px; }
-		.audio-wave-bar:nth-child(3) { height: 20px; }
-		&--playing .audio-wave-bar { animation: audio-wave .9s ease-in-out infinite; }
-		&--playing .audio-wave-bar:nth-child(2n) { animation-delay: .2s; }
-		&--playing .audio-wave-bar:nth-child(3) { animation-delay: .4s; } }
-	.audio-duration { flex-shrink: 0; margin-left: auto; padding-left: 8px; font-size: 13px;
-		line-height: 20px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-	@keyframes audio-spin { to { transform: rotate(360deg); } }
-	@keyframes audio-wave { 0%, 100% { transform: scaleY(.45); } 50% { transform: scaleY(1); } }
-	@media (prefers-reduced-motion: reduce) { .audio-spinner, .audio-waveform--playing .audio-wave-bar { animation: none; } }
-	.message-image { display: block; width: 230px; max-width: 100%; border-radius: 3px; }
-	.message-bottom { height: 12px; }
-	.message-context-menu { position: fixed; z-index: 30; box-sizing: border-box; width: 96px; padding: 4px 0;
-		border: 1px solid #e5e8eb; border-radius: 4px; background: #fff; box-shadow: 0 3px 12px rgba(0, 0, 0, .12); }
-	.message-context-menu-item { display: block; box-sizing: border-box; width: 100%; height: 38px; margin: 0; padding: 0 16px;
-		border: 0; border-radius: 0; font-size: 13px; line-height: 38px; text-align: left; color: #65717b;
-		background: transparent; cursor: pointer; &::after { border: 0; }
-		&:hover { color: #f37324; background: #fff6f0; }
-		&[disabled] { color: #a4abb4; background: transparent; cursor: default; }
-		&:focus-visible { outline: 2px solid #f37324; outline-offset: -2px; } }
-	.composer { position: relative; flex: 0 0 158px; box-sizing: border-box; border-top: 1px solid #eceff1; }
-	.composer-toolbar { display: flex; align-items: center; height: 42px; padding: 0 18px; gap: 16px; }
-	.composer-tool { display: inline-flex; align-items: center; flex-shrink: 0; color: #9aa3ab; font-size: 13px;
-		cursor: pointer; &:hover { color: #f37324; } }
-	.composer-tool--button { width: auto; margin: 0; padding: 0; border: 0; border-radius: 0; line-height: normal;
-		background: transparent; &::after { border: 0; } }
-	.composer-tool--active { color: #f37324; }
-	.composer-pin { justify-content: flex-start; width: auto; min-width: 60px; height: 28px;
-		&[disabled] { color: #a4abb4; cursor: default; }
-		&:focus-visible { outline: 2px solid #f37324; outline-offset: 2px; } }
-	.tool-icon { margin-right: 4px; width: 18px; height: 18px; float: left; }
-	.toolbar-right { display: flex; align-items: center; gap: 16px; margin-left: auto; }
-	.more-menu-trigger { position: relative; display: flex; flex-shrink: 0; margin-left: -8px; }
-	.tool-more { justify-content: center; width: 28px; height: 28px; font-size: 20px;
-		&:focus-visible { outline: 2px solid #f37324; outline-offset: 2px; } }
+	.message-text {
+		max-width: 100%;
+	}
+
+	.message-text-copy {
+		max-width: 100%;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+
+	.message-emoji {
+		display: inline-block;
+		width: 28px;
+		height: 28px;
+		margin: 0 2px;
+		vertical-align: middle;
+	}
+
+	.message-bubble--audio {
+		display: flex;
+		align-items: center;
+		flex: 0 1 auto;
+		height: 44px;
+		min-width: 120px;
+		margin-right: 0;
+		margin-left: 0;
+		border: 0;
+		text-align: left;
+		cursor: pointer;
+
+		&::after {
+			border: 0;
+		}
+
+		&:hover {
+			filter: brightness(.97);
+		}
+
+		&:focus-visible {
+			outline: 2px solid #f37324;
+			outline-offset: 3px;
+		}
+
+		&.audio-active {
+			color: #f37324;
+		}
+	}
+
+	.audio-indicator {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex: 0 0 20px;
+		width: 20px;
+		height: 20px;
+	}
+
+	.audio-play-icon {
+		font-family: Arial, sans-serif;
+		font-size: 14px;
+		line-height: 20px;
+	}
+
+	.audio-spinner {
+		box-sizing: border-box;
+		width: 14px;
+		height: 14px;
+		border: 2px solid #f0c7ad;
+		border-top-color: #f37324;
+		border-radius: 50%;
+		animation: audio-spin .8s linear infinite;
+	}
+
+	.audio-waveform {
+		display: flex;
+		align-items: center;
+		flex: 0 0 25px;
+		height: 20px;
+		margin-left: 8px;
+
+		.audio-wave-bar {
+			width: 3px;
+			height: 8px;
+			margin-right: 2px;
+			border-radius: 1px;
+			background: currentColor;
+		}
+
+		.audio-wave-bar:nth-child(2),
+		.audio-wave-bar:nth-child(4) {
+			height: 14px;
+		}
+
+		.audio-wave-bar:nth-child(3) {
+			height: 20px;
+		}
+
+		&--playing .audio-wave-bar {
+			animation: audio-wave .9s ease-in-out infinite;
+		}
+
+		&--playing .audio-wave-bar:nth-child(2n) {
+			animation-delay: .2s;
+		}
+
+		&--playing .audio-wave-bar:nth-child(3) {
+			animation-delay: .4s;
+		}
+	}
+
+	.audio-duration {
+		flex-shrink: 0;
+		margin-left: auto;
+		padding-left: 8px;
+		font-size: 13px;
+		line-height: 20px;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	@keyframes audio-spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	@keyframes audio-wave {
+
+		0%,
+		100% {
+			transform: scaleY(.45);
+		}
+
+		50% {
+			transform: scaleY(1);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+
+		.audio-spinner,
+		.audio-waveform--playing .audio-wave-bar {
+			animation: none;
+		}
+	}
+
+	.message-image {
+		display: block;
+		width: 230px;
+		max-width: 100%;
+		border-radius: 3px;
+	}
+
+	.message-bottom {
+		height: 12px;
+	}
+
+	.message-context-menu {
+		position: fixed;
+		z-index: 30;
+		box-sizing: border-box;
+		width: 96px;
+		padding: 4px 0;
+		border: 1px solid #e5e8eb;
+		border-radius: 4px;
+		background: #fff;
+		box-shadow: 0 3px 12px rgba(0, 0, 0, .12);
+	}
+
+	.message-context-menu-item {
+		display: block;
+		box-sizing: border-box;
+		width: 100%;
+		height: 38px;
+		margin: 0;
+		padding: 0 16px;
+		border: 0;
+		border-radius: 0;
+		font-size: 13px;
+		line-height: 38px;
+		text-align: left;
+		color: #65717b;
+		background: transparent;
+		cursor: pointer;
+
+		&::after {
+			border: 0;
+		}
+
+		&:hover {
+			color: #f37324;
+			background: #fff6f0;
+		}
+
+		&[disabled] {
+			color: #a4abb4;
+			background: transparent;
+			cursor: default;
+		}
+
+		&:focus-visible {
+			outline: 2px solid #f37324;
+			outline-offset: -2px;
+		}
+	}
+
+	.composer {
+		position: relative;
+		flex: 0 0 158px;
+		box-sizing: border-box;
+		border-top: 1px solid #eceff1;
+	}
+
+	.composer-toolbar {
+		display: flex;
+		align-items: center;
+		height: 42px;
+		padding: 0 20px;
+		gap: 20px;
+	}
+
+	.composer-tool {
+		display: inline-flex;
+		align-items: center;
+		flex-shrink: 0;
+		color: #999ea6;
+		font-size: 14px;
+		cursor: pointer;
+
+		&:hover {
+			color: #f37324;
+		}
+	}
+
+	.composer-tool--button {
+		width: auto;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		line-height: normal;
+		background: transparent;
+
+		&::after {
+			border: 0;
+		}
+	}
+
+	.composer-tool--active {
+		color: #f37324;
+	}
+
+	.composer-pin {
+		justify-content: flex-start;
+		width: auto;
+		min-width: 60px;
+		height: 28px;
+
+		&[disabled] {
+			color: #a4abb4;
+			cursor: default;
+		}
+
+		&:focus-visible {
+			outline: 2px solid #f37324;
+			outline-offset: 2px;
+		}
+	}
+
+	.tool-icon {
+		margin-right: 5px;
+		width: 18px;
+		height: 18px;
+		float: left;
+	}
+
+	.toolbar-right {
+		display: flex;
+		align-items: center;
+		gap: 16px;
+		margin-left: auto;
+	}
+
+	.more-menu-trigger {
+		position: relative;
+		display: flex;
+		flex-shrink: 0;
+		margin-left: -8px;
+	}
+
+	.tool-more {
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		font-size: 20px;
+
+		&:focus-visible {
+			outline: 2px solid #f37324;
+			outline-offset: 2px;
+		}
+	}
+
 	// 将菜单与按钮之间的间距包含在悬停区域内，鼠标移入菜单时不会意外收起。
-	.more-menu-popover { position: absolute; right: 0; bottom: 100%; z-index: 4; width: 116px; padding-bottom: 8px; }
-	.more-menu { position: relative; padding: 4px 0; border: 1px solid #e5e8eb; border-radius: 4px; background: #fff;
+	.more-menu-popover {
+		position: absolute;
+		right: 0;
+		bottom: 100%;
+		z-index: 4;
+		width: 116px;
+		padding-bottom: 8px;
+	}
+
+	.more-menu {
+		position: relative;
+		padding: 4px 0;
+		border: 1px solid #e5e8eb;
+		border-radius: 4px;
+		background: #fff;
 		box-shadow: 0 3px 12px rgba(0, 0, 0, .08);
-		&::after { position: absolute; right: 9px; bottom: -5px; width: 8px; height: 8px; content: '';
-			border-right: 1px solid #e5e8eb; border-bottom: 1px solid #e5e8eb; background: #fff; transform: rotate(45deg); } }
-	.more-menu-item { display: block; box-sizing: border-box; width: 100%; height: 36px; margin: 0; padding: 0 16px;
-		border: 0; border-radius: 0; font-size: 13px; line-height: 36px; text-align: left; color: #65717b;
-		background: transparent; cursor: pointer; &::after { border: 0; }
-		&:hover { color: #f37324; background: #fff6f0; }
-		&[disabled] { color: #a4abb4; background: transparent; cursor: default; }
-		&:focus-visible { outline: 2px solid #f37324; outline-offset: -2px; } }
-	.composer-input-row { padding: 0 15px 12px 24px; }
-	.composer-input { display: block; box-sizing: border-box; width: 100%; height: 60px; min-height: 60px; padding: 0;
-		border: 0; outline: 0; resize: none; font-family: inherit; font-size: 14px; line-height: 22px; color: #333;
-		background: #fff; &:disabled { background: #fff; } }
-	.composer-footer { display: flex; align-items: center; justify-content: flex-end; gap: 24px; margin-top: 8px; }
-	.composer-hint { font-size: 12px; color: #c0c5ca; }
-	.send-button { display: flex; align-items: center; justify-content: center; width: 70px; height: 34px;
-		margin: 0; padding: 0; border: 0; border-radius: 3px; font-size: 13px; line-height: 34px; color: #fff;
-		background: #f37324; cursor: pointer; &::after { border: 0; }
-		&[disabled] { color: #fff; background: #f6c09f; cursor: default; } }
-	.emoji-panel { position: absolute; bottom: 158px; left: 18px; z-index: 3; display: grid;
-		grid-template-columns: repeat(9, minmax(0, 1fr)); box-sizing: border-box;
-		width: 374px; max-height: 244px; overflow-x: hidden; overflow-y: auto; padding: 8px;
-		border: 1px solid #e5e8eb; border-radius: 4px; background: #fff;
-		box-shadow: 0 3px 12px rgba(0, 0, 0, .08); }
-	.emoji-item { display: flex; align-items: center; justify-content: center; min-width: 0; height: 38px; cursor: pointer;
-		&:hover { border-radius: 3px; background: #fff6f0; } }
-	.emoji-image { width: 28px; height: 28px; }
-	.phrase-panel { position: absolute; bottom: 158px; left: 18px; z-index: 3; box-sizing: border-box;
-		width: 380px; max-width: calc(100% - 36px); border: 1px solid #e5e8eb; background: #fff;
+
+		&::after {
+			position: absolute;
+			right: 9px;
+			bottom: -5px;
+			width: 8px;
+			height: 8px;
+			content: '';
+			border-right: 1px solid #e5e8eb;
+			border-bottom: 1px solid #e5e8eb;
+			background: #fff;
+			transform: rotate(45deg);
+		}
+	}
+
+	.more-menu-item {
+		display: block;
+		box-sizing: border-box;
+		width: 100%;
+		height: 36px;
+		margin: 0;
+		padding: 0 16px;
+		border: 0;
+		border-radius: 0;
+		font-size: 13px;
+		line-height: 36px;
+		text-align: left;
+		color: #65717b;
+		background: transparent;
+		cursor: pointer;
+
+		&::after {
+			border: 0;
+		}
+
+		&:hover {
+			color: #f37324;
+			background: #fff6f0;
+		}
+
+		&[disabled] {
+			color: #a4abb4;
+			background: transparent;
+			cursor: default;
+		}
+
+		&:focus-visible {
+			outline: 2px solid #f37324;
+			outline-offset: -2px;
+		}
+	}
+
+	.composer-input-row {
+		padding: 0 15px 12px 24px;
+	}
+
+	.composer-input {
+		display: block;
+		box-sizing: border-box;
+		width: 100%;
+		height: 60px;
+		min-height: 60px;
+		padding: 0;
+		border: 0;
+		outline: 0;
+		resize: none;
+		font-family: inherit;
+		font-size: 14px;
+		line-height: 22px;
+		color: #333;
+		background: #fff;
+
+		&:disabled {
+			background: #fff;
+		}
+	}
+
+	.composer-footer {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 24px;
+		margin-top: 8px;
+	}
+
+	.composer-hint {
+		font-size: 12px;
+		color: #c0c5ca;
+	}
+
+	.send-button {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 70px;
+		height: 34px;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 3px;
+		font-size: 13px;
+		line-height: 34px;
+		color: #fff;
+		background: #f37324;
+		cursor: pointer;
+
+		&::after {
+			border: 0;
+		}
+
+		&[disabled] {
+			color: #fff;
+			background: #f6c09f;
+			cursor: default;
+		}
+	}
+
+	.emoji-panel {
+		position: absolute;
+		bottom: 158px;
+		left: 18px;
+		z-index: 3;
+		display: grid;
+		grid-template-columns: repeat(9, minmax(0, 1fr));
+		box-sizing: border-box;
+		width: 374px;
+		max-height: 244px;
+		overflow-x: hidden;
+		overflow-y: auto;
+		padding: 8px;
+		border: 1px solid #e5e8eb;
+		border-radius: 4px;
+		background: #fff;
+		box-shadow: 0 3px 12px rgba(0, 0, 0, .08);
+	}
+
+	.emoji-item {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 0;
+		height: 38px;
+		cursor: pointer;
+
+		&:hover {
+			border-radius: 3px;
+			background: #fff6f0;
+		}
+	}
+
+	.emoji-image {
+		width: 28px;
+		height: 28px;
+	}
+
+	.phrase-panel {
+		position: absolute;
+		bottom: 158px;
+		left: 18px;
+		z-index: 3;
+		box-sizing: border-box;
+		width: 380px;
+		max-width: calc(100% - 36px);
+		border: 1px solid #e5e8eb;
+		background: #fff;
 		box-shadow: 0 2px 14px rgba(0, 0, 0, .09);
+
 		// 箭头对准常用语工具按钮，浮层不占用聊天区或输入区布局。
-		&::after { position: absolute; bottom: -6px; left: 94px; width: 10px; height: 10px; content: '';
-			border-right: 1px solid #e5e8eb; border-bottom: 1px solid #e5e8eb; background: #fff; transform: rotate(45deg); } }
-	.phrase-panel-header { display: flex; align-items: center; justify-content: space-between; box-sizing: border-box;
-		height: 46px; padding: 0 20px; border-bottom: 1px solid #f0f2f5; font-size: 14px; color: #9aa3ab; }
-	.phrase-settings { font-size: 12px; color: #f37324; cursor: pointer; }
-	.phrase-list { height: 180px; overflow-x: hidden; overflow-y: auto; }
-	.phrase-item { display: flex; align-items: center; box-sizing: border-box; width: 100%; height: 45px; margin: 0;
-		padding: 0 20px; border: 0; border-bottom: 1px solid #f0f2f5; border-radius: 0; font-size: 13px;
-		line-height: 44px; text-align: left; color: #65717b; background: #fff; cursor: pointer;
-		&::after { border: 0; } &:hover { background: #fff6f0; }
-		&[disabled] { color: #a4abb4; background: #fff; cursor: default; }
-		&:focus-visible { outline: 2px solid #f37324; outline-offset: -2px; } }
-	.phrase-message { display: block; flex: 1; min-width: 0; max-width: 100%; overflow: hidden;
-		text-overflow: ellipsis; white-space: nowrap; }
-	.phrase-sending { flex-shrink: 0; margin-left: 12px; font-size: 12px; color: #f37324; }
-	.phrase-status { box-sizing: border-box; width: 100%; margin: 0; padding: 28px 16px; border: 0; border-radius: 0;
-		font-size: 13px; line-height: 22px; text-align: center; color: #9aa3ab; background: #fff;
-		&::after { border: 0; } }
-	.phrase-status--error { color: #f37324; cursor: pointer; }
+		&::after {
+			position: absolute;
+			bottom: -6px;
+			left: 94px;
+			width: 10px;
+			height: 10px;
+			content: '';
+			border-right: 1px solid #e5e8eb;
+			border-bottom: 1px solid #e5e8eb;
+			background: #fff;
+			transform: rotate(45deg);
+		}
+	}
+
+	.phrase-panel-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		box-sizing: border-box;
+		height: 46px;
+		padding: 0 20px;
+		border-bottom: 1px solid #f0f2f5;
+		font-size: 14px;
+		color: #9aa3ab;
+	}
+
+	.phrase-settings {
+		font-size: 12px;
+		color: #f37324;
+		cursor: pointer;
+	}
+
+	.phrase-list {
+		height: 180px;
+		overflow-x: hidden;
+		overflow-y: auto;
+	}
+
+	.phrase-item {
+		display: flex;
+		align-items: center;
+		box-sizing: border-box;
+		width: 100%;
+		height: 45px;
+		margin: 0;
+		padding: 0 20px;
+		border: 0;
+		border-bottom: 1px solid #f0f2f5;
+		border-radius: 0;
+		font-size: 13px;
+		line-height: 44px;
+		text-align: left;
+		color: #65717b;
+		background: #fff;
+		cursor: pointer;
+
+		&::after {
+			border: 0;
+		}
+
+		&:hover {
+			background: #fff6f0;
+		}
+
+		&[disabled] {
+			color: #a4abb4;
+			background: #fff;
+			cursor: default;
+		}
+
+		&:focus-visible {
+			outline: 2px solid #f37324;
+			outline-offset: -2px;
+		}
+	}
+
+	.phrase-message {
+		display: block;
+		flex: 1;
+		min-width: 0;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.phrase-sending {
+		flex-shrink: 0;
+		margin-left: 12px;
+		font-size: 12px;
+		color: #f37324;
+	}
+
+	.phrase-status {
+		box-sizing: border-box;
+		width: 100%;
+		margin: 0;
+		padding: 28px 16px;
+		border: 0;
+		border-radius: 0;
+		font-size: 13px;
+		line-height: 22px;
+		text-align: center;
+		color: #9aa3ab;
+		background: #fff;
+
+		&::after {
+			border: 0;
+		}
+	}
+
+	.phrase-status--error {
+		color: #f37324;
+		cursor: pointer;
+	}
 </style>

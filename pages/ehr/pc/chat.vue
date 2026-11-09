@@ -790,6 +790,8 @@
 						const conversation = existing || this.createRouteConversation(targetId)
 						if (!conversation) return
 						return this.selectConversation(conversation, {
+							// 外链同时提供职位和简历时，优先用于本次自动打开的会话。
+							useRouteIds: Boolean(this.routeJobId && this.routeResumeId),
 							// 只有“列表没有该人才 + messageExisted=false”才走外链的 Limits 分支；
 							// 已存在会话或未传 messageExisted 仍保持原有 GetSingleChat 逻辑。
 							useRouteAccess: !existing && this.routeMessageExistedProvided && !this.routeMessageExisted
@@ -1129,6 +1131,7 @@
 				this.openingConversationId = conversation.id
 				try {
 					const useRouteAccess = Boolean(options && options.useRouteAccess)
+					const useRouteIds = useRouteAccess || Boolean(options && options.useRouteIds)
 					if (useRouteAccess && (!this.routeJobId || !this.routeResumeId)) {
 						throw new Error('缺少 messageExisted=false 所需的 jobId 或 resumeId')
 					}
@@ -1156,9 +1159,9 @@
 					if (!useRouteAccess && data.Code !== undefined && Number(data.Code) !== 0) {
 						throw new Error('获取会话信息失败')
 					}
-					const jobId = String(useRouteAccess
+					const jobId = String(useRouteIds
 						? this.routeJobId : (data.JobId === undefined || data.JobId === null ? '' : data.JobId)).trim()
-					const resumeId = String(useRouteAccess
+					const resumeId = String(useRouteIds
 						? this.routeResumeId : (data.ResumeId === undefined || data.ResumeId === null ? '' : data.ResumeId)).trim()
 					if (!jobId || !resumeId) throw new Error('会话信息缺少职位或简历')
 					// 账号若有返回则必须与所点击的会话一致，防止业务资料与云信消息串到另一位人才。
@@ -1206,6 +1209,42 @@
 			},
 			async sendContinueHistoryMessage(detail, enterprise, isCurrent) {
 				if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪，请稍后重试')
+				const enterpriseJobId = enterprise && (enterprise.JobId !== undefined ? enterprise.JobId
+					: enterprise.Id !== undefined ? enterprise.Id : enterprise.ID)
+				const jobId = String(enterpriseJobId === undefined || enterpriseJobId === null ? '' : enterpriseJobId).trim()
+					|| detail.jobId
+				const limitsResponse = await requestApi({
+					Name: 'Chat.MyChat.Limits',
+					Content: { JobId: jobId, ResumeId: detail.resumeId }
+				})
+				if (isCurrent && !isCurrent()) return false
+				if (!limitsResponse || Number(limitsResponse.Code) !== 0) {
+					const code = limitsResponse && limitsResponse.Code !== undefined ? limitsResponse.Code : 'unknown'
+					throw new Error(`获取沟通状态失败，业务错误码：${code}`)
+				}
+				let limitsData = limitsResponse.Data
+				if (typeof limitsData === 'string') {
+					try { limitsData = JSON.parse(limitsData) } catch (error) {
+						throw new Error('沟通限制接口返回的数据格式不正确')
+					}
+				}
+				if (!limitsData || typeof limitsData !== 'object' || Array.isArray(limitsData)) limitsData = {}
+				if (limitsData.Code !== undefined && Number(limitsData.Code) !== 0) {
+					throw new Error(`获取沟通状态失败，数据错误码：${limitsData.Code}`)
+				}
+				if (limitsData.SuccessStep || limitsResponse.SuccessStep) {
+					// 让实时聊天面板用同一份 Limits 响应执行企业端 SuccessStep 逻辑。
+					const stepDetail = {
+						...this.updateContinueJobDetail(detail, enterprise),
+						initialAccess: { ...limitsResponse, Data: limitsResponse.Data === undefined ? limitsData : limitsResponse.Data }
+					}
+					this.historyChatDetail = stepDetail
+					this.chatDetail = stepDetail
+					this.selectedId = stepDetail.conversationId
+					this.activeMessageTab = 'all'
+					this.activeMainTab = 'recent'
+					return false
+				}
 				const nim = getNimInstance()
 				const creator = nim && nim.V2NIMMessageCreator
 				const service = nim && nim.V2NIMMessageService
@@ -1277,8 +1316,8 @@
 						// 文档 2264：切换成功后返回 Enterprise，必须把同一个对象作为 type=5 消息 data。
 						const enterprise = await changeHistoryChatJob(detail.personAccId, detail.enterpriseAccId, selectedJobId)
 						if (!isCurrent()) return
-						await this.sendContinueHistoryMessage(detail, enterprise, isCurrent)
-						if (!isCurrent()) return
+						const sent = await this.sendContinueHistoryMessage(detail, enterprise, isCurrent)
+						if (!sent || !isCurrent()) return
 						this.cancelOpeningConversation()
 						const switchedDetail = this.updateContinueJobDetail({ ...detail, jobId: selectedJobId }, enterprise)
 						// 同步历史详情快照，用户返回历史分类后继续沟通不会再次使用失效职位。
@@ -1301,10 +1340,12 @@
 						// 文档 2264：传入当前历史职位 ID，成功后使用返回 Enterprise 发送 type=5。
 						enterprise = await changeHistoryChatJob(detail.personAccId, detail.enterpriseAccId, currentJobId)
 						if (!isCurrent()) return
-						await this.sendContinueHistoryMessage(detail, enterprise, isCurrent)
+						const sent = await this.sendContinueHistoryMessage(detail, enterprise, isCurrent)
+						if (!sent) return
 					} else {
 						// 职位 ID 一致时发送固定的继续沟通文本，随后进入实时聊天。
-						await this.sendContinueHistoryMessage(detail, null, isCurrent)
+						const sent = await this.sendContinueHistoryMessage(detail, null, isCurrent)
+						if (!sent) return
 					}
 					if (!isCurrent()) return
 					// 发送成功后才创建实时聊天面板；skipGreeting 防止实时面板再次发送默认招呼语。

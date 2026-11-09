@@ -15,9 +15,11 @@ const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
 async function verify() {
   const calls = []
   const sent = []
+  const eventOrder = []
   const browserLocation = { href: '' }
   const modals = []
   let limitsSuccessStep = null
+  let limitsErrorMessage = ''
   let pageBackCount = 0
   const nim = {
     V2NIMMessageCreator: {
@@ -26,6 +28,7 @@ async function verify() {
     },
     V2NIMMessageService: {
       sendMessage: async (message, conversationId) => {
+        eventOrder.push('send')
         sent.push({ message, conversationId })
         return {
           message: {
@@ -55,8 +58,10 @@ async function verify() {
     setActiveConversationId() {},
     getExternalReturnUrl: options => String(options && options.returnUrl || '').trim(),
     requestApi: async args => {
+      eventOrder.push(args.Name)
       calls.push(args)
       if (args.Name === 'Chat.MyChat.Limits') {
+        if (limitsErrorMessage) return { Code: 1, ErrorMessage: limitsErrorMessage }
         return {
           Code: 0,
           Data: {
@@ -117,14 +122,20 @@ async function verify() {
   assert.equal(page.selfAvatar, '/static/woman_avatar.png')
   page.jobId = 'job-7'
   page.resumeId = 'resume-3'
-  page.prepareNimConversation = async () => { page.conversationId = 'p2p-enterprise-2' }
+  let conversationPrepareCount = 0
+  page.prepareNimConversation = async () => {
+    conversationPrepareCount += 1
+    page.conversationId = 'p2p-enterprise-2'
+  }
   page.scrollToBottom = () => {}
 
   await page.loadChatAccess()
 
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 4)
   assert.equal(calls[0].Name, 'Chat.MyChat.Limits')
   assert.equal(calls[1].Name, 'Chat.ChatButton.Get')
+  assert.equal(calls[2].Name, 'Chat.MyChat.Limits')
+  assert.equal(calls[3].Name, 'Chat.MyChat.Limits')
   assert.deepEqual(calls[1].Content, { JobId: 'job-7' })
   assert.equal(page.codeNum, '128943')
   page.handleAction({ key: 'company' })
@@ -146,12 +157,28 @@ async function verify() {
 
   page.checkOtherBlockedBeforeSend = async () => {}
   page.draft = '13812345678'
+  const beforeTextLimitCheck = calls.filter(call => call.Name === 'Chat.MyChat.Limits').length
+  const beforeTextSend = sent.length
   await page.sendMessage()
+  assert.equal(calls.filter(call => call.Name === 'Chat.MyChat.Limits').length, beforeTextLimitCheck + 1)
+  assert.equal(eventOrder[eventOrder.length - 2], 'Chat.MyChat.Limits')
+  assert.equal(eventOrder[eventOrder.length - 1], 'send')
   assert.equal(sent[sent.length - 1].message.text, '138****5678')
   assert.equal(page.draft, '')
   page.transcribedText = '13987654321'
   await page.sendTranscribedText()
   assert.equal(sent[sent.length - 1].message.text, '139****4321')
+
+  limitsSuccessStep = { Tips: '请完善简历后再联系企业', StepName: '立即完善' }
+  const sentBeforeLimited = sent.length
+  const modalBeforeLimited = modals.length
+  page.draft = '受限时不应发送'
+  await page.sendMessage()
+  assert.equal(sent.length, sentBeforeLimited)
+  assert.equal(page.draft, '受限时不应发送')
+  assert.equal(modals.length, modalBeforeLimited + 1)
+  assert.equal(modals[modals.length - 1].confirmText, '立即完善')
+  limitsSuccessStep = null
 
   page.messages = [{
     messageClientId: 'custom-4',
@@ -259,6 +286,18 @@ async function verify() {
   assert.equal(page._skipInitialChatGreeting, false)
   assert.equal(sent.length, sentCount + 2)
 
+  const forwardedStep = { Tips: '请在聊天前完善简历', StepName: '立即完善' }
+  const limitsBeforeForwardedStep = calls.filter(call => call.Name === 'Chat.MyChat.Limits').length
+  const modalsBeforeForwardedStep = modals.length
+  await definition.onLoad.call(page, {
+    jobId: 'job-7', resumeId: 'resume-3', skipGreeting: '1',
+    successStep: encodeURIComponent(JSON.stringify(forwardedStep))
+  })
+  assert.equal(calls.filter(call => call.Name === 'Chat.MyChat.Limits').length, limitsBeforeForwardedStep)
+  assert.equal(modals.length, modalsBeforeForwardedStep + 1)
+  assert.equal(modals[modals.length - 1].content, forwardedStep.Tips)
+  assert.equal(sent.length, sentCount + 2)
+
   // Limits 返回 SuccessStep 时展示可取消弹窗；取消返回聊天上一页，确定按 StepName 跳转。
   limitsSuccessStep = { Tips: '请先完善简历', StepName: '立即完善' }
   const modalCount = modals.length
@@ -275,7 +314,7 @@ async function verify() {
     page.navigateByStep(stepName)
     assert.equal(browserLocation.href, 'https://m.texhr.cn/person/standardresume/myresume/')
   }
-  page.navigateByStep('解除')
+  page.navigateByStep('立即解除')
   assert.equal(browserLocation.href, 'https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
 
   page.personAccId = 'person/report id'
@@ -294,7 +333,21 @@ async function verify() {
   assert.equal(deliveryModal.confirmText, '立即完善')
   deliveryModal.success({ confirm: true })
   assert.equal(browserLocation.href, 'https://m.texhr.cn/person/standardresume/myresume/')
+
+  limitsErrorMessage = '该职位信息不存在或已招满'
+  const sentBeforeLimitError = sent.length
+  const preparedBeforeLimitError = conversationPrepareCount
+  await page.loadChatAccess()
+  assert.equal(page.chatLimitErrorMessage, limitsErrorMessage)
+  assert.equal(page.historyLoadError, '')
+  assert.equal(sent.length, sentBeforeLimitError)
+  assert.equal(conversationPrepareCount, preparedBeforeLimitError)
+  assert.match(source, /v-if="!chatLimitErrorMessage" class="action-menu"/)
+  assert.match(source, /v-if="!chatLimitErrorMessage" class="composer"/)
+  assert.match(source, /src="\.\.\/\.\.\/\.\.\/static\/empty_content\.jpg"/)
+  assert.match(source, /class="chat-limit-error-message">\{\{ chatLimitErrorMessage \}\}/)
   console.log('PASS: matching jobs send the Limits message as type=4 before the ChatButton Greetings text')
+  console.log('PASS: mobile text sends check Limits first and SuccessStep blocks delivery while preserving the draft')
   console.log('PASS: history continuation skips duplicate default greetings while normal chat entries still send them')
   console.log('PASS: custom type=4/5 job cards, malformed payload fallback, native message isolation, and logo fallback')
   console.log('PASS: custom job cards wait for GetJobState and map State=1 to status=true')
@@ -302,6 +355,7 @@ async function verify() {
   console.log('PASS: Limits CodeNum is saved and used to open the mobile company homepage')
   console.log('PASS: SuccessStep cancel returns to the previous page and confirm routes by StepName')
   console.log('PASS: delivery success confirmation routes through navigateByStep(buttonName)')
+  console.log('PASS: Limits errors with ErrorMessage hide chat controls and display the centered empty state')
 }
 
 verify().catch(error => {

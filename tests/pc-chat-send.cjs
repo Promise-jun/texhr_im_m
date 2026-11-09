@@ -17,9 +17,10 @@ function deferred() {
 }
 
 function environment(blocked = false) {
-  const checks = [], sends = [], toasts = [], order = [], events = [], warnings = []
+  const checks = [], sends = [], toasts = [], modals = [], limitsCalls = [], order = [], events = [], warnings = []
   const state = { blocked, loggedIn: true }
   let check = async accounts => ({ [accounts[0]]: state.blocked })
+  let limits = async () => ({ Code: 0, Data: {} })
   let send = async (message, conversationId) => ({ message: { ...message, conversationId,
     messageClientId: `sent-${sends.length}`, createTime: sends.length, isSelf: true } })
   const nim = {
@@ -32,12 +33,14 @@ function environment(blocked = false) {
     } }
   }
   const context = vm.createContext({ module: { exports: {} }, NIM_EMOJIS: [], maskPhoneNumbers,
+    requestApi: args => { limitsCalls.push(args); order.push('limits'); return limits(args) },
     getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
     console: { warn: (...args) => warnings.push(args) },
-    uni: { showToast: value => { toasts.push(value); order.push('toast') } } })
+    uni: { showToast: value => { toasts.push(value); order.push('toast') }, showModal: value => modals.push(value) } })
   vm.runInContext(script, context)
   const def = context.module.exports
   const panel = { conversation: { name: '模拟人才' }, detail: { conversationId: 'a' },
+    jobId: 'job-a', resumeId: 'resume-a',
     personAccId: 'talent-a', enterpriseAccId: 'enterprise', drafts: { a: '当前草稿', b: '其它草稿' },
     visible: true, opening: false, _alive: true,
     $set: (obj, key, value) => { obj[key] = value }, $emit: event => events.push(event),
@@ -50,8 +53,8 @@ function environment(blocked = false) {
   }
   panel.accessReady = true
   panel.messages = [{ conversationId: 'a', messageClientId: 'history', text: '历史消息', createTime: 0 }]
-  return { panel, nim, checks, sends, toasts, order, events, warnings, state,
-    check: fn => { check = fn }, send: fn => { send = fn } }
+  return { panel, nim, checks, sends, toasts, modals, limitsCalls, order, events, warnings, state,
+    check: fn => { check = fn }, send: fn => { send = fn }, limits: fn => { limits = fn } }
 }
 
 async function verify() {
@@ -83,10 +86,13 @@ async function verify() {
       assert.equal(panel.draft, '当前草稿')
     }
     assert.deepEqual(env.checks, [['talent-a']])
-    assert.deepEqual(env.order, ['check', 'toast', 'send'])
+    assert.deepEqual(env.order, ['limits', 'check', 'toast', 'send'])
     assert.equal(env.toasts[0].title, BLOCK_WARNING)
     assert.equal(env.toasts[0].icon, 'none')
     assert.equal(env.sends.length, 1)
+    assert.deepEqual(env.limitsCalls[0], {
+      Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-a', ResumeId: 'resume-a' }
+    })
     assert.equal(env.sends[0].conversationId, 'a')
     if (typeof content === 'string') assert.equal(env.sends[0].message.text, content)
     assert.equal(panel.messages.length, 2)
@@ -95,6 +101,18 @@ async function verify() {
     assert.deepEqual(env.events, ['changed'])
   }
   console.log('PASS: all message types query the talent account before sending; own blacklist only warns and never blocks delivery')
+
+  const limited = environment()
+  limited.limits(async () => ({ Code: 0, Data: { SuccessStep: { Tips: '请先完善简历', StepName: '立即完善' } } }))
+  limited.panel.draft = '暂不发送'
+  assert.equal(await limited.panel.sendMessage(), false)
+  assert.equal(limited.sends.length, 0)
+  assert.equal(limited.panel.draft, '暂不发送')
+  assert.equal(limited.panel.accessReady, false)
+  assert.equal(limited.modals.length, 1)
+  assert.equal(limited.modals[0].confirmText, '立即完善')
+  assert.deepEqual(limited.order, ['limits'])
+  console.log('PASS: Limits SuccessStep runs the enterprise prompt and prevents message delivery')
 
   const refreshed = environment(), { panel } = refreshed
   panel.blockStatusLoaded = true; panel.isOtherBlocked = true

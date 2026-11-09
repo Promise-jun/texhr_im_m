@@ -91,6 +91,34 @@ async function verify() {
   assert.equal(existing.chatDetail.personAccId, 'person-1')
   assert.deepStrictEqual(state.calls.map(call => call.Name), ['Chat.Chat.GetSingleChat'])
 
+  // 已有会话优先使用完整的 URL 职位/简历，不受 messageExisted 取值影响。
+  for (const messageExisted of [true, false, undefined]) {
+    state.calls.length = 0
+    const linked = loadPage(makeGlobals(state))
+    prepare(linked, 'person-1', {
+      messageExisted, jobId: 'job-from-url', resumeId: 'resume-from-url'
+    })
+    await linked.openRouteConversationAfterLoad()
+    assert.equal(linked.chatDetail.jobId, 'job-from-url')
+    assert.equal(linked.chatDetail.resumeId, 'resume-from-url')
+    assert.equal(linked.chatDetail.initialAccess, null)
+    assert.deepStrictEqual(state.calls.map(call => call.Name), ['Chat.Chat.GetSingleChat'])
+
+    // 再点击其他人才时，使用对应会话的接口数据。
+    await linked.selectConversation({ id: 'p2p-other', targetId: 'other', type: 1 })
+    assert.equal(linked.chatDetail.jobId, 'job-1')
+    assert.equal(linked.chatDetail.resumeId, 'resume-1')
+  }
+
+  // URL 参数不完整时，职位与简历仍使用同一份会话数据。
+  for (const flags of [{ jobId: 'job-from-url' }, { resumeId: 'resume-from-url' }]) {
+    const partial = loadPage(makeGlobals(state))
+    prepare(partial, 'person-1', flags)
+    await partial.openRouteConversationAfterLoad()
+    assert.equal(partial.chatDetail.jobId, 'job-1')
+    assert.equal(partial.chatDetail.resumeId, 'resume-1')
+  }
+
   // messageExisted=false 且列表没有会话时，请求 Limits 并使用 URL 的职位/简历。
   state.calls.length = 0
   state.listedConversations = []
@@ -167,6 +195,16 @@ async function verify() {
   prepare(legacy, 'person-5')
   await legacy.openRouteConversationAfterLoad()
   assert.equal(state.calls[0].Name, 'Chat.Chat.GetSingleChat')
+  assert.equal(legacy.chatDetail.jobId, 'job-5')
+  assert.equal(legacy.chatDetail.resumeId, 'resume-5')
+
+  // 未传 messageExisted 且列表无会话时，URL 参数同样优先。
+  const linkedLegacy = loadPage(makeGlobals(state))
+  prepare(linkedLegacy, 'person-6', { jobId: 'job-from-url', resumeId: 'resume-from-url' })
+  await linkedLegacy.openRouteConversationAfterLoad()
+  assert.equal(linkedLegacy.chatDetail.jobId, 'job-from-url')
+  assert.equal(linkedLegacy.chatDetail.resumeId, 'resume-from-url')
+  assert.equal(state.calls[state.calls.length - 1].Name, 'Chat.Chat.GetSingleChat')
 
   console.log('pc chat route conversation tests passed')
 }

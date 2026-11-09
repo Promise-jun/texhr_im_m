@@ -38,6 +38,7 @@ function environment() {
   const listeners = new Map()
   const state = { loggedIn: true, account: 'person-1', loginError: null, back: 0, relaunch: '' }
   let request = async args => {
+    if (args.Name === 'Chat.MyChat.Limits') return { Code: 0, Data: {} }
     if (args.Name === 'Chat.Chat.GetSingleChat') return { Code: 0, Data: singleDetail }
     if (args.Name === 'Chat.Person.GetJobState') return { Code: 0, Data: { State: 1 } }
     if (args.Name === 'Chat.ChatButton.Get') return { Code: 0, Data: { JobId: singleDetail.JobId, ToAccId: 'enterprise-1' } }
@@ -545,6 +546,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve))
 const continuedUrl = `/pages/person/m/chat?jobId=${encodeURIComponent(singleDetail.JobId)}&resumeId=${encodeURIComponent(singleDetail.ResumeId)}&skipGreeting=1`
 const selectedUrl = `/pages/person/m/chat?jobId=${encodeURIComponent(availableJob.JobId)}&resumeId=${encodeURIComponent(singleDetail.ResumeId)}&skipGreeting=1`
 function jobPickerRequest(args, state = 2) {
+  if (args.Name === 'Chat.MyChat.Limits') return Promise.resolve({ Code: 0, Data: {} })
   if (args.Name === 'Chat.Person.GetJobState') return Promise.resolve({ Code: 0, Data: { State: state } })
   if (args.Name === 'Chat.Chat.GetJobList') return Promise.resolve({ Code: 0, Data: { Rows: [availableJob] } })
   if (args.Name === 'Chat.Chat.ChangeJob') return Promise.resolve({ Code: 0, Data: {
@@ -583,6 +585,9 @@ async function verifyJobPickerFlow() {
         PersonAccId: 'person-1', EnterpriseAccId: 'enterprise-1', JobId: availableJob.JobId, IsMessage: true
       }
     })
+    assert.deepStrictEqual(env.calls[5], {
+      Name: 'Chat.MyChat.Limits', Content: { JobId: availableJob.JobId, ResumeId: singleDetail.ResumeId }
+    })
     assert.deepStrictEqual(JSON.parse(env.sent[0].message.body), {
       type: 5, data: { ...availableJob, EnterpriseTime: '职位已变更', Tips: '保留接口字段' }
     })
@@ -597,7 +602,8 @@ async function verifyJobPickerFlow() {
     text.resolve({ message: env.sent[1].message })
     await flush()
     assert.deepStrictEqual(env.events.slice(2), [
-      'Chat.Person.GetJobState', 'Chat.Chat.GetJobList', 'Chat.Chat.ChangeJob', 'custom', 'text'
+      'Chat.Person.GetJobState', 'Chat.Chat.GetJobList', 'Chat.Chat.ChangeJob',
+      'Chat.MyChat.Limits', 'custom', 'Chat.MyChat.Limits', 'text'
     ])
     assert.equal(env.navigation[0].url, selectedUrl)
     assert.equal(env.page.chatDetail.JobId, singleDetail.JobId)
@@ -713,6 +719,7 @@ async function verifyJobPickerCancellationAndRetry() {
 }
 
 function mismatchRequest(args) {
+  if (args.Name === 'Chat.MyChat.Limits') return Promise.resolve({ Code: 0, Data: {} })
   if (args.Name === 'Chat.Person.GetJobState') return Promise.resolve({ Code: 0, Data: { State: 1 } })
   if (args.Name === 'Chat.ChatButton.Get') return Promise.resolve({ Code: 0, Data: { JobId: 'old-job', ToAccId: 'enterprise-1' } })
   if (args.Name === 'Chat.Chat.ChangeJob') return Promise.resolve({ Code: 0, Data: { Enterprise: { JobId: singleDetail.JobId, JobName: '页面职位' } } })
@@ -729,7 +736,7 @@ async function verifyContinueFlow() {
   await matched.enter()
   const first = matched.page.continueChat()
   await flush()
-  assert.deepStrictEqual(matched.events.slice(2), ['Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'text'])
+  assert.deepStrictEqual(matched.events.slice(2), ['Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.MyChat.Limits', 'text'])
   assert.equal(matched.modals.length, 0)
   assert.equal(matched.sent[0].conversationId, 'p2p-enterprise-1')
   assert.equal(matched.sent[0].message.text, '我正在求职，请问贵公司还招人吗？')
@@ -765,11 +772,17 @@ async function verifyContinueFlow() {
   assert.deepStrictEqual(JSON.parse(changed.sent[0].message.body), {
     type: 5, data: { JobId: singleDetail.JobId, JobName: '页面职位' }
   })
+  assert.deepStrictEqual(changed.calls[5], {
+    Name: 'Chat.MyChat.Limits', Content: { JobId: singleDetail.JobId, ResumeId: singleDetail.ResumeId }
+  })
   assert.equal(changed.sent.length, 1)
   assert.equal(changed.navigation.length, 0)
   customReceipt.resolve({ message: changed.sent[0].message })
   await flush()
-  assert.deepStrictEqual(changed.events.slice(2), ['Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.Chat.ChangeJob', 'custom', 'text'])
+  assert.deepStrictEqual(changed.events.slice(2), [
+    'Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.Chat.ChangeJob', 'Chat.MyChat.Limits', 'custom',
+    'Chat.MyChat.Limits', 'text'
+  ])
   assert.equal(changed.sent[1].message.text, '我正在求职，请问贵公司还招人吗？')
   assert.equal(changed.sent[1].conversationId, changed.sent[0].conversationId)
   assert.equal(changed.navigation[0].url, continuedUrl)
@@ -808,6 +821,29 @@ async function verifyContinueFlow() {
     assert.equal(failed.page.isContinuingChat, false)
     if (stage === 'login') assert.equal(failed.calls.length, 4) // SDK 未就绪时不切换业务职位。
   }
+}
+
+async function verifyContinueSuccessStep() {
+  const env = environment()
+  await env.enter()
+  env.request(args => args.Name === 'Chat.Person.GetJobState'
+    ? { Code: 0, Data: { State: 1 } }
+    : args.Name === 'Chat.ChatButton.Get'
+      ? { Code: 0, Data: { JobId: singleDetail.JobId, ToAccId: 'enterprise-1' } }
+      : args.Name === 'Chat.MyChat.Limits'
+        ? { Code: 0, Data: { SuccessStep: { Tips: '请完善简历', StepName: '立即完善' } } }
+        : { Code: 0, Data: {} })
+  const continuing = env.page.continueChat()
+  await flush()
+  assert.equal(env.sent.length, 0)
+  assert.equal(env.navigation.length, 1)
+  assert.ok(env.navigation[0].url.startsWith(`${continuedUrl}&successStep=`))
+  assert.deepStrictEqual(JSON.parse(decodeURIComponent(env.navigation[0].url.split('&successStep=')[1])), {
+    Tips: '请完善简历', StepName: '立即完善'
+  })
+  env.navigation[0].success()
+  await continuing
+  assert.equal(env.page._continueChatOpened, true)
 }
 
 async function verifyContinueRetryAndUnload() {
@@ -876,6 +912,7 @@ async function verify() {
   await verifyJobPickerFlow()
   await verifyJobPickerCancellationAndRetry()
   await verifyContinueFlow()
+  await verifyContinueSuccessStep()
   await verifyContinueRetryAndUnload()
   console.log('mobile chat history detail tests passed')
 }
