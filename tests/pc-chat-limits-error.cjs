@@ -13,9 +13,11 @@ vm.runInNewContext(harness.slice(0, harness.indexOf('async function verify()')) 
 const { environment, greetingEnvironment, source } = context.module.exports
 
 async function verify() {
-  for (const className of ['job-context', 'action-link resume-link', 'composer']) {
-    assert.ok(source.includes(`v-show="!limitsErrorMessage" class="${className}"`), className)
-  }
+  assert.ok(source.includes('v-show="!limitsErrorMessage" class="job-context"'))
+  assert.ok(source.includes('class="action-link resume-link"'))
+  assert.ok(source.includes('<view class="composer">'))
+  assert.ok(!source.includes('v-show="!limitsErrorMessage" class="action-link resume-link"'))
+  assert.ok(!source.includes('v-show="!limitsErrorMessage" class="composer"'))
   assert.match(source, /class="chat-title"/)
   assert.match(source, /accessError \|\| historyError/)
 

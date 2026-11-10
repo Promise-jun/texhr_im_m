@@ -7,7 +7,7 @@
 				<text class="action-link" @click="emitAction('switch-job', '切换职位')">切换</text>
 			</view>
 			<text class="chat-title">{{ otherUser.name || conversation.name }}</text>
-			<text v-show="!limitsErrorMessage" class="action-link resume-link" @click="emitAction('resume', '查看简历')">查看简历</text>
+			<text class="action-link resume-link" @click="emitAction('resume', '查看简历')">查看简历</text>
 		</view>
 
 		<scroll-view class="message-scroll" scroll-y :scroll-into-view="scrollTarget" :upper-threshold="60"
@@ -102,7 +102,7 @@
 			</view>
 		</scroll-view>
 
-		<view v-show="!limitsErrorMessage" class="composer">
+		<view class="composer">
 			<view class="composer-toolbar">
 				<text class="composer-tool" @click.stop="toggleEmojiPanel">
 					<image src="/static/pc/icon_emoji.png" class="tool-icon"></image> 表情
@@ -715,6 +715,7 @@
 						if (typeof this.$emit === 'function') this.$emit('access-consumed', this.conversationId)
 					} else {
 						// 普通点击会话及权限失败后的重试，仍按当前职位/简历请求 Limits。
+						console.log(33333333333333)
 						response = await requestApi({
 							Name: 'Chat.MyChat.Limits',
 							Content: {
@@ -822,6 +823,7 @@
 				const conversationId = this.conversationId
 				const personAccId = this.personAccId
 				const enterpriseAccId = this.enterpriseAccId
+				console.log(4444444444444444444)
 				const response = await requestApi({
 					Name: 'Chat.MyChat.Limits',
 					Content: {
@@ -829,6 +831,7 @@
 						ResumeId: checkedResumeId
 					}
 				})
+				console.log(321, response)
 				if (!this._alive || !isCurrent() || this.conversationId !== conversationId ||
 					this.personAccId !== personAccId || this.enterpriseAccId !== enterpriseAccId) return false
 				const data = responseData(response)

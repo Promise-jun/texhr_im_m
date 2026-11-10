@@ -30,6 +30,7 @@
 				<view v-if="chatLimitErrorMessage" class="chat-limit-error-state">
 					<image src="../../../static/empty_content.jpg" class="chat-limit-error-image" mode="aspectFit"></image>
 					<text class="chat-limit-error-message">{{ chatLimitErrorMessage }}</text>
+					<button class="chat-limit-error-button" @click.stop="navigateBack">知道了</button>
 				</view>
 				<template v-else>
 				<view class="load-status" :class="{ 'load-status--error': historyLoadError }" @click="retryChatLoad">
@@ -1091,7 +1092,7 @@
 			async checkChatLimitsBeforeSend() {
 				const jobId = this.jobId === undefined || this.jobId === null ? '' : String(this.jobId).trim()
 				const resumeId = this.resumeId === undefined || this.resumeId === null ? '' : String(this.resumeId).trim()
-				if (!jobId || !resumeId) throw new Error('缺少 jobId 或 resumeId')
+				if (!jobId) throw new Error('缺少 jobId')
 				const conversationId = this.conversationId
 				const enterpriseAccId = this.enterpriseAccId
 				const response = await requestApi({
@@ -1759,7 +1760,7 @@
 			},
 			navigateByStep(stepName) {
 				const normalizedStepName = String(stepName || '').trim()
-				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '立即验证', '立即更新']
+				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '修改简历', '立即验证', '立即更新']
 				if (resumeStepNames.includes(normalizedStepName)) {
 					this.openMobileSiteUrl('https://m.texhr.cn/person/standardresume/myresume/')
 					return
@@ -1767,6 +1768,9 @@
 				if (normalizedStepName === '立即解除') {
 					this.openMobileSiteUrl('https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
 					return
+				}
+				if (normalizedStepName === '知道了') {
+					this.navigateBack()
 				}
 				// uni.showToast({
 				// 	title: normalizedStepName ? `暂不支持${normalizedStepName}操作` : '未获取到下一步操作',
@@ -2167,7 +2171,7 @@
 						title: '温馨提示',
 						content: tips,
 						showCancel: false,
-						confirmText: buttonName || '知道了',
+						confirmText: buttonName || '确定',
 						success: () => this.navigateByStep(buttonName)
 					})
 				} catch (error) {
@@ -3809,6 +3813,24 @@
 		line-height: 40rpx;
 		color: #5c636f;
 		text-align: center;
+	}
+
+	.chat-limit-error-button {
+		box-sizing: border-box;
+		min-width: 200rpx;
+		height: 72rpx;
+		margin: 48rpx 0 0;
+		padding: 0 32rpx;
+		font-size: 28rpx;
+		line-height: 72rpx;
+		color: #ffffff;
+		background: #f37324;
+		border: none;
+		border-radius: 8rpx;
+
+		&::after {
+			border: none;
+		}
 	}
 
 	.load-status {

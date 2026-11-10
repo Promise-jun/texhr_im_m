@@ -67,7 +67,7 @@ export async function getHistoryChatJobState(jobId) {
 	})
 	const data = responseData(response, '获取职位状态')
 	const state = Number(data.State)
-	if (![1, 2, 3].includes(state)) throw new Error('获取职位状态失败：接口 State 格式不正确')
+	// if (![1, 2, 3].includes(state)) throw new Error('获取职位状态失败：接口 State 格式不正确')
 	return state
 }
 

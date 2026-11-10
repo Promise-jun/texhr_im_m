@@ -54,6 +54,18 @@
 					"titleNView": false
 				}
 			}
+		},
+		{
+			"path": "pages/ehr/pc/error",
+			"style": {
+				"navigationStyle": "custom",
+				"enablePullDownRefresh": false,
+				"backgroundColor": "white",
+				"navigationBarTitleText": "企业直聊",
+				"app-plus": {
+					"titleNView": false
+				}
+			}
 		}
 	],
 	"globalStyle": {
