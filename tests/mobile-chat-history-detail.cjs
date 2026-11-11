@@ -525,12 +525,22 @@ async function verifyJobListService() {
   assert.equal(jobs.length, 2)
   assert.deepStrictEqual(jobs[0], { ...availableJob, key: `job-${availableJob.JobId}-0` })
   assert.deepStrictEqual(jobs[1], { JobId: '42', key: 'job-42-1', JobName: '未命名职位', Location: '-', Salary: '-' })
+  for (const data of [undefined, null, '', [], {}, { Rows: null }, { Rows: [] }, 'null', '[]', '{"Rows":null}', '{"Rows":[]}']) {
+    env.request(async () => ({ Code: 0, Data: data }))
+    assert.deepStrictEqual(plain(await env.service.getHistoryChatJobList('enterprise-1')), [])
+  }
+  for (const data of [[availableJob], JSON.stringify([availableJob])]) {
+    env.request(async () => ({ Code: 0, Data: data }))
+    assert.deepStrictEqual(plain(await env.service.getHistoryChatJobList('enterprise-1')), [jobs[0]])
+  }
   for (const [response, expected] of [
     [{ Code: 9 }, /业务错误码/],
+    [{ Code: 9, Data: null }, /业务错误码/],
     [{ Code: 0, Data: { Code: 9 } }, /数据错误码/],
     [{ Code: 0, Data: '{invalid' }, /有效 JSON/],
-    [{ Code: 0, Data: [] }, /数据格式/],
-    [{ Code: 0, Data: { Rows: null } }, /Rows/]
+    [{ Code: 0, Data: false }, /数据格式/],
+    [{ Code: 0, Data: 42 }, /数据格式/],
+    [{ Code: 0, Data: { Rows: {} } }, /Rows/]
   ]) {
     env.request(async () => response)
     await assert.rejects(env.service.getHistoryChatJobList('enterprise-1'), expected)
@@ -632,6 +642,24 @@ async function verifyJobPickerCancellationAndRetry() {
   assert.equal(env.page.isContinuingChat, false)
   assert.equal(env.sent.length, 0)
   assert.equal(env.navigation.length, 0)
+
+  for (const data of [undefined, null, '', [], {}, { Rows: null }, { Rows: [] }, 'null', '[]']) {
+    const empty = environment()
+    await empty.enter()
+    empty.request(args => args.Name === 'Chat.Chat.GetJobList'
+      ? Promise.resolve({ Code: 0, Data: data }) : jobPickerRequest(args))
+    const continuing = empty.page.continueChat()
+    await flush()
+    assert.equal(empty.page.jobList.length, 0)
+    assert.equal(empty.page.jobListError, '')
+    assert.equal(empty.page.isLoadingJobs, false)
+    assert.equal(empty.page.isJobPickerVisible, true)
+    assert.equal(empty.sent.length, 0)
+    assert.equal(empty.navigation.length, 0)
+    empty.page.closeJobPicker()
+    await continuing
+    assert.equal(empty.page.isContinuingChat, false)
+  }
 
   // 空列表保留弹窗，关闭后可重新查询；旧请求不能覆盖下一次打开的列表。
   for (const lateError of [false, true]) {

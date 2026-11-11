@@ -14,11 +14,13 @@ function accountId(value) {
 	return value === undefined || value === null ? '' : String(value).trim()
 }
 
-function responseData(response, title) {
+function responseData(response, title, { list = false } = {}) {
 	if (!response || response.Code === undefined || Number(response.Code) !== 0) {
 		throw new Error(`${title}失败，业务错误码：${response && response.Code !== undefined ? response.Code : 'unknown'}`)
 	}
 	let data = response.Data
+	// 职位列表无数据时可能返回空 Data 或数组，统一成 Rows 后再校验。
+	if (list && (data === undefined || data === null || data === '')) data = []
 	if (typeof data === 'string') {
 		try {
 			data = JSON.parse(data)
@@ -26,6 +28,7 @@ function responseData(response, title) {
 			throw new Error(`${title}失败：接口 Data 不是有效 JSON`)
 		}
 	}
+	if (list && (data === null || Array.isArray(data))) data = { Rows: data || [] }
 	if (!data || typeof data !== 'object' || Array.isArray(data)) {
 		throw new Error(`${title}失败：接口数据格式不正确`)
 	}
@@ -112,9 +115,10 @@ export async function getHistoryChatJobList(enterpriseAccId) {
 		Name: CHAT_GET_JOB_LIST_API,
 		Content: { accid: enterprise, Start: 0, pageSize: 50 }
 	})
-	const data = responseData(response, '获取职位列表')
-	if (!Array.isArray(data.Rows)) throw new Error('获取职位列表失败：接口 Rows 格式不正确')
-	return data.Rows.map((row, index) => {
+	const data = responseData(response, '获取职位列表', { list: true })
+	const rows = data.Rows === undefined || data.Rows === null ? [] : data.Rows
+	if (!Array.isArray(rows)) throw new Error('获取职位列表失败：接口 Rows 格式不正确')
+	return rows.map((row, index) => {
 		if (!row || typeof row !== 'object' || Array.isArray(row)) return null
 		const jobId = accountId(row.JobId)
 		if (!jobId) return null

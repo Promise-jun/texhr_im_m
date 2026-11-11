@@ -175,20 +175,24 @@ function isEnterprisePage() {
 }
 
 function getAuthFromCookie(isEnterprise) {
-	// // 获取当前页面url
-	// const url = window.location.pathname;
-	// // 判断是否包含 ehr（区分大小写，EHR 匹配不到）
-	// if (url.includes('ehr')) {
-	// 	return {
-	// 		EnterpriseId: 198185,
-	// 		Token: 'qVcEQ8iUGNAJcMnKtXub',
-	// 	}
-	// } else {
-	// 	return {
-	// 		PersonId: 248665,
-	// 		Token: 'QhFY63uiQUroWN23S7sQ',
-	// 	}
-	// }
+	// 获取当前页面url
+	const url = window.location.pathname;
+	// 判断是否包含 ehr（区分大小写，EHR 匹配不到）
+	if (url.includes('ehr')) {
+		return {
+			EnterpriseId: 198185,
+			Token: 'KEtwybo0VRbgyRE5YzRn',
+			// EnterpriseId: 19441,
+			// Token: 'a-1WwtwRIxVMQZdA795W',
+		}
+	} else {
+		return {
+			PersonId: 210902,
+			Token: 'w73oZEqLlHVL1t7GA4Lx',
+		}
+		// PersonId: 251883,
+		// Token: '7R5ymI3Zt9w9wVPoI0bo',
+	}
 
 	const idField = isEnterprise ? 'EnterpriseId' : 'PersonId'
 	const cookieKey = isEnterprise ? AUTH_COOKIE_KEYS.ENTERPRISE : AUTH_COOKIE_KEYS.PERSONAL

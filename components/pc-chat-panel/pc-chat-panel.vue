@@ -19,8 +19,8 @@
 				<view v-if="isCheckingAccess || (isLoadingHistory && !messages.length)" class="message-state">
 					正在加载聊天记录...
 				</view>
-				<view v-if="accessError || historyError" class="message-state message-state--error" @click="retryLoad">
-					{{ accessError || historyError }}，点击重试
+				<view v-if="historyError" class="message-state message-state--error" @click="retryLoad">
+					{{ historyError }}，点击重试
 				</view>
 				<view v-else-if="!isCheckingAccess && !isLoadingHistory && !messages.length && accessReady"
 					class="message-state">暂无聊天记录，发送消息开始沟通吧</view>
@@ -30,7 +30,7 @@
 					<view v-else-if="message.type === 'revoked'" :id="message.anchor" :key="message.id"
 						class="time-divider revoked-message">
 						<text>{{ message.content }}</text>
-						<text class="revoked-message-edit" @click.stop="reEditMessage(message)">重新编辑</text>
+						<text v-if="message.direction === 'self'" class="revoked-message-edit" @click.stop="reEditMessage(message)">重新编辑</text>
 					</view>
 					<view v-else :id="message.anchor" :key="message.id" class="message-row"
 						:class="[message.direction, { 'message-row--person-card': message.type === 'person-card' }]"
@@ -67,26 +67,40 @@
 							<image :src="message.url" class="message-image" mode="widthFix"
 								@load="handleMessageImageLoad"></image>
 						</view>
-						<button v-else-if="message.type === 'audio'" class="message-bubble message-bubble--audio"
-							:class="{ 'audio-active': audioActiveId === message.id }"
-							:style="{ width: message.audioWidth }" :aria-label="audioButtonLabel(message)"
-							:title="audioButtonLabel(message)"
-							:aria-pressed="audioActiveId === message.id ? 'true' : 'false'"
-							@click="playAudioMessage(message)">
-							<view class="audio-indicator" aria-hidden="true">
-								<view v-if="audioActiveId === message.id && audioState === 'loading'"
-									class="audio-spinner"></view>
-								<text v-else
-									class="audio-play-icon">{{ audioActiveId === message.id ? '❚❚' : '▶' }}</text>
+						<view v-else-if="message.type === 'audio'" class="message-audio">
+							<view class="audio-controls">
+								<button class="message-bubble message-bubble--audio"
+									:class="{ 'audio-active': audioActiveId === message.id }"
+									:style="{ width: message.audioWidth }" :aria-label="audioButtonLabel(message)"
+									:title="audioButtonLabel(message)"
+									:aria-pressed="audioActiveId === message.id ? 'true' : 'false'"
+									@click="playAudioMessage(message)">
+									<view class="audio-indicator" aria-hidden="true">
+										<view v-if="audioActiveId === message.id && audioState === 'loading'"
+											class="audio-spinner"></view>
+										<text v-else
+											class="audio-play-icon">{{ audioActiveId === message.id ? '❚❚' : '▶' }}</text>
+									</view>
+									<view class="audio-waveform"
+										:class="{ 'audio-waveform--playing': audioActiveId === message.id && audioState === 'playing' }"
+										aria-hidden="true">
+										<view v-for="bar in 5" :key="bar" class="audio-wave-bar"></view>
+									</view>
+									<text
+										class="audio-duration">{{ message.durationSeconds ? message.durationSeconds + '"' : '--"' }}</text>
+								</button>
+								<button class="audio-transcribe-button"
+									:disabled="Boolean(message.transcription && message.transcription.status !== 'error')"
+									:aria-busy="message.transcription && message.transcription.status === 'loading' ? 'true' : 'false'"
+									@click.stop="transcribeAudioMessage(message)">
+									{{ message.transcription && message.transcription.status === 'loading' ? '转换中...' : message.transcription && message.transcription.status === 'error' ? '重试' : '转文字' }}
+								</button>
 							</view>
-							<view class="audio-waveform"
-								:class="{ 'audio-waveform--playing': audioActiveId === message.id && audioState === 'playing' }"
-								aria-hidden="true">
-								<view v-for="bar in 5" :key="bar" class="audio-wave-bar"></view>
-							</view>
-							<text
-								class="audio-duration">{{ message.durationSeconds ? message.durationSeconds + '"' : '--"' }}</text>
-						</button>
+							<view v-if="message.transcription && message.transcription.status !== 'loading'"
+								class="message-bubble audio-transcription"
+								:class="{ 'audio-transcription--error': message.transcription.status === 'error' }"
+								role="status" aria-live="polite">{{ message.transcription.text || message.transcription.error }}</view>
+						</view>
 						<view v-else-if="message.type !== 'person-card'" class="message-bubble message-bubble--text">
 							<view class="message-text">
 								<block v-for="(segment, segmentIndex) in message.segments" :key="segmentIndex">
@@ -310,6 +324,12 @@
 		return errorMessage.includes(MESSAGE_REVOKE_EXPIRED_CODE)
 	}
 
+	function matchesRevokeRefer(message, refer) {
+		if (!message || !refer || !refer.conversationId || message.conversationId !== refer.conversationId) return false
+		return Boolean((refer.messageClientId && message.messageClientId && String(refer.messageClientId) === String(message.messageClientId)) ||
+			(refer.messageServerId && message.messageServerId && String(refer.messageServerId) === String(message.messageServerId)))
+	}
+
 	function messageId(message) {
 		return String(message.messageClientId || message.messageServerId || [message.senderId, message.createTime, message
 			.messageType, message.text
@@ -502,6 +522,7 @@
 				audioActiveId: '',
 				audioState: 'idle',
 				audioDurations: {},
+				audioTranscriptions: {},
 				// 业务接口明确返回 false 时不能被云信旧缓存覆盖；未返回状态时才使用本地会话兜底。
 				isPinning: false,
 				isPinned: this.detail.isPinned !== undefined ?
@@ -565,7 +586,6 @@
 			displayMessages() {
 				const rows = []
 				let previousTime = 0
-				console.log(111, this.messages)
 				this.messages.forEach(message => {
 					const id = messageId(message)
 					const timestamp = Number(message.createTime) || 0
@@ -610,6 +630,8 @@
 						durationSeconds,
 						audioWidth: audioBubbleWidth(durationSeconds),
 						mimeType: getAudioMimeType(attachment),
+						transcription: this.audioTranscriptions[id] && this.audioTranscriptions[id].url === attachment.url ?
+							this.audioTranscriptions[id] : null,
 						content,
 						person,
 						// 文本和兼容性提示都走同一解析器，未知 [xxx] 会原样显示。
@@ -658,6 +680,7 @@
 			// #endif
 			// 父组件按会话 ID 创建独立实例，旧实例卸载后异步结果不会写进新会话。
 			uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
+			uni.$on(NIM_EVENT.MESSAGE_REVOKED, this.handleMessageRevoked)
 			uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
 			this.loadChatAccess()
 		},
@@ -670,6 +693,7 @@
 			document.removeEventListener('keydown', this._composerDismissHandler)
 			// #endif
 			uni.$off(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
+			uni.$off(NIM_EVENT.MESSAGE_REVOKED, this.handleMessageRevoked)
 			uni.$off(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
 			this.releaseCurrentConversation()
 		},
@@ -715,7 +739,6 @@
 						if (typeof this.$emit === 'function') this.$emit('access-consumed', this.conversationId)
 					} else {
 						// 普通点击会话及权限失败后的重试，仍按当前职位/简历请求 Limits。
-						console.log(33333333333333)
 						response = await requestApi({
 							Name: 'Chat.MyChat.Limits',
 							Content: {
@@ -823,7 +846,6 @@
 				const conversationId = this.conversationId
 				const personAccId = this.personAccId
 				const enterpriseAccId = this.enterpriseAccId
-				console.log(4444444444444444444)
 				const response = await requestApi({
 					Name: 'Chat.MyChat.Limits',
 					Content: {
@@ -831,7 +853,6 @@
 						ResumeId: checkedResumeId
 					}
 				})
-				console.log(321, response)
 				if (!this._alive || !isCurrent() || this.conversationId !== conversationId ||
 					this.personAccId !== personAccId || this.enterpriseAccId !== enterpriseAccId) return false
 				const data = responseData(response)
@@ -905,7 +926,7 @@
 				return this._chatUpgradePromise
 			},
 			navigateBack() {
-				window.close()
+				this.$emit('navigate-back', this.conversationId)
 			},
 			isCurrentChatGreeting(greeting) {
 				return Boolean(greeting && this._alive && this.accessReady &&
@@ -1020,6 +1041,7 @@
 			},
 			releaseCurrentConversation() {
 				this.stopAudio()
+				this.clearPendingAudioTranscriptions()
 				this.closeComposerPanels()
 				// 仅释放本实例拥有的前台会话，避免旧组件销毁时取消新组件的已读状态。
 				if (getActiveConversationId() !== this.conversationId) return
@@ -1071,7 +1093,12 @@
 				list.forEach(message => {
 					if (!message || message.conversationId !== this.conversationId) return
 					if (message.isDelete) map.delete(messageId(message))
-					else map.set(messageId(message), message)
+					else {
+						const id = messageId(message)
+						const previous = map.get(id)
+						const revoked = (previous && previous.isRevoked) || (this._messageRevokeRefs || []).some(refer => matchesRevokeRefer(message, refer))
+						map.set(id, revoked ? { ...message, isRevoked: true, revokedText: previous && previous.revokedText !== undefined ? previous.revokedText : message.revokedText } : message)
+					}
 				})
 				// 历史、实时和发送回执可能包含相同消息，按 SDK 消息 ID 去重后再排序。
 				this.messages = Array.from(map.values()).sort((a, b) =>
@@ -1122,6 +1149,15 @@
 			retryLoad() {
 				if (!this.accessReady) this.loadChatAccess()
 				else this.prepareConversation()
+			},
+			handleMessageRevoked(notifications) {
+				if (!this._alive) return
+				const refs = (Array.isArray(notifications) ? notifications : [])
+					.map(item => item && item.messageRefer)
+					.filter(refer => refer && refer.conversationId === this.conversationId && (refer.messageClientId || refer.messageServerId))
+				if (!refs.length) return
+				this._messageRevokeRefs = (this._messageRevokeRefs || []).concat(refs)
+				this.mergeMessages(this.messages.filter(message => refs.some(refer => matchesRevokeRefer(message, refer))))
 			},
 			handleReceiveMessages(list) {
 				if (!this._alive || !this.accessReady || !Array.isArray(list)) return
@@ -1858,6 +1894,69 @@
 					urls: this.displayMessages.filter(row => row.type === 'image').map(row => row.url)
 				})
 			},
+			clearPendingAudioTranscriptions() {
+				Object.keys(this.audioTranscriptions).forEach(id => {
+					if (this.audioTranscriptions[id].status === 'loading') this.$delete(this.audioTranscriptions, id)
+				})
+			},
+			async transcribeAudioMessage(message) {
+				if (!this._alive || !this.visible || this.opening || !this.accessReady) return
+				const rawMessage = this.findRawMessage(message)
+				if (!rawMessage || rawMessage.isRevoked || Number(rawMessage.messageType) !== 2 ||
+					rawMessage.conversationId !== this.conversationId) return
+				if (!isNimLoggedIn()) {
+					uni.showToast({ title: '聊天连接已断开，请稍后重试', icon: 'none' })
+					return
+				}
+				const id = messageId(rawMessage)
+				const attachment = rawMessage.attachment || {}
+				const previous = this.audioTranscriptions[id]
+				if (previous && previous.url === attachment.url && previous.status !== 'error') return
+				const conversationId = this.conversationId
+				const state = { url: attachment.url, status: 'loading', text: '', error: '' }
+				this.$set(this.audioTranscriptions, id, state)
+				// 消息被撤回、删除、替换或面板离开后，旧请求不能覆盖新状态。
+				const isCurrent = () => {
+					const current = this.findRawMessage(id)
+					return this._alive && this.visible && this.conversationId === conversationId &&
+						this.audioTranscriptions[id] === state && current && !current.isRevoked &&
+						Number(current.messageType) === 2 && (current.attachment || {}).url === state.url
+				}
+				let errorText = '语音转文字失败，请重试'
+				try {
+					if (!attachment.url) {
+						errorText = '语音地址无效，无法转文字'
+						throw new Error(errorText)
+					}
+					const service = getNimInstance().V2NIMMessageService
+					if (!service || typeof service.voiceToText !== 'function') {
+						errorText = '当前聊天服务不支持语音转文字'
+						throw new Error(errorText)
+					}
+					// V2 接口的 duration 使用毫秒，不能使用气泡展示时向上取整的秒数。
+					const duration = Number(attachment.duration)
+					const measured = Number(this.audioDurations[id]) * 1000
+					const result = await service.voiceToText({
+						voiceUrl: attachment.url,
+						duration: Number.isFinite(duration) && duration > 0 ? duration :
+							Number.isFinite(measured) && measured > 0 ? measured : 0
+					})
+					if (!isCurrent()) return
+					const text = typeof result === 'string' ? result.trim() : ''
+					if (!text) {
+						errorText = '未识别到文字，请重试'
+						throw new Error(errorText)
+					}
+					this.$set(this.audioTranscriptions, id, { ...state, status: 'success', text })
+				} catch (error) {
+					if (isCurrent()) {
+						this.$set(this.audioTranscriptions, id, { ...state, status: 'error', error: errorText })
+						console.warn('[PC Chat] 语音转文字失败', error)
+					}
+				} finally {
+					if (this._alive && this.audioTranscriptions[id] === state) this.$delete(this.audioTranscriptions, id)
+				}
+			},
 			audioButtonLabel(message) {
 				const duration = message.durationSeconds ? `，${message.durationSeconds}秒` : ''
 				if (this.audioActiveId === message.id) return this.audioState === 'loading' ? '正在加载，点击取消' : '停止播放语音'
@@ -2318,6 +2417,78 @@
 		height: 28px;
 		margin: 0 2px;
 		vertical-align: middle;
+	}
+
+	.message-audio {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		min-width: 0;
+		max-width: 66%;
+	}
+
+	.audio-controls {
+		display: flex;
+		align-items: center;
+		max-width: 100%;
+
+		.message-bubble--audio {
+			max-width: 100%;
+		}
+	}
+
+	.message-row.self {
+		.message-audio {
+			align-items: flex-end;
+		}
+
+		.audio-controls {
+			flex-direction: row-reverse;
+		}
+	}
+
+	.audio-transcribe-button {
+		flex-shrink: 0;
+		margin: 4px 10px 0;
+		padding: 0;
+		border: 0;
+		font-size: 13px;
+		line-height: 24px;
+		color: #f37324;
+		background: transparent;
+		cursor: pointer;
+
+		&::after {
+			border: 0;
+		}
+
+		&:hover:not(:disabled) {
+			text-decoration: underline;
+		}
+
+		&:focus-visible {
+			outline: 2px solid #f37324;
+			outline-offset: 3px;
+		}
+
+		&:disabled {
+			color: #9199a0;
+			cursor: default;
+		}
+	}
+
+	.audio-transcription {
+		max-width: 100%;
+		margin-top: 8px;
+		user-select: text;
+
+		&::before {
+			display: none;
+		}
+
+		&--error {
+			color: #c85022;
+		}
 	}
 
 	.message-bubble--audio {

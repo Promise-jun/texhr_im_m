@@ -102,7 +102,7 @@
 					<view v-else-if="jobListError" class="job-picker-status job-picker-status--error" @click="loadHistoryJobList">
 						{{ jobListError }}，点击重试
 					</view>
-					<view v-else-if="!jobList.length" class="job-picker-status">暂无可沟通职位</view>
+					<view v-else-if="!jobList.length" class="job-picker-status">该企业无发布中职位，暂无法发起聊天</view>
 					<view v-else v-for="job in jobList" :key="job.key" class="job-picker-item" @click="selectHistoryChatJob(job)">
 						<text>{{ job.JobName }}-{{ job.Location }}-{{ job.Salary }}</text>
 					</view>

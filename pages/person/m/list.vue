@@ -11,7 +11,7 @@
 
 		<view class="tabs">
 			<view v-for="tab in tabs" :key="tab.key" class="tab-item" :class="{ active: activeTab === tab.key }"
-				@click="activeTab = tab.key">
+				@click="switchTab(tab.key)">
 				{{ tab.label }}
 			</view>
 		</view>
@@ -57,8 +57,13 @@
 				@click="retryVisibleConversations">
 				<text>{{ visibleLoadError }}，点击重试</text>
 			</view>
-			<view v-else-if="!visibleConversations.length" class="list-state">
-				<text>{{ activeTab === 'recent' ? '七天内暂无会话' : '暂无历史会话' }}</text>
+			<view v-else-if="!visibleConversations.length" class="list-state is-empty">
+				<image src="/static/pc_chat_empty.png" class="empty-image" mode="aspectFit"></image>
+				<text>{{ activeTab === 'recent' ? '暂无互动聊天记录' : '暂无历史聊天记录' }}</text>
+			</view>
+			<view v-if="activeTab === 'history' && historyConversations.length" class="history-more"
+				:class="{ 'is-error': historyLoadMoreError }" @click="loadMoreHistoryConversations">
+				<text>{{ isHistoryLoadingMore ? '正在加载...' : historyLoadMoreError ? historyLoadMoreError + '，点击重试' : hasMoreHistoryConversations ? '上拉加载更多' : '没有更多会话了' }}</text>
 			</view>
 		</view>
 	</view>
@@ -73,7 +78,7 @@
 		isNimLoggedIn
 	} from '../../../services/nim'
 	import {
-		getAllHistoryConversations,
+		getHistoryConversationsPage,
 		getAllNimConversations,
 		normalizeAndSortConversations
 	} from '../../../services/conversation'
@@ -116,7 +121,11 @@
 				rawConversations: [],
 				historyConversations: [],
 				isLoading: true,
-				isHistoryLoading: true,
+				isHistoryLoading: false,
+				isHistoryLoadingMore: false,
+				historyPage: 0,
+				hasMoreHistoryConversations: false,
+				historyLoadMoreError: '',
 				loadError: '',
 				historyLoadError: '',
 				currentTime: Date.now(),
@@ -156,13 +165,17 @@
 			this.externalReturnUrl = getExternalReturnUrl(options)
 			this._conversationPageAlive = true
 			this._historyConversationsLoaded = false
+			this._historyConversationsRequested = false
+			this._historyConversationRequestId = 0
 			this.bindConversationEvents()
 		},
 		onShow() {
-			// 返回时刷新 SDK 实时会话；历史会话在当前列表页只加载一次。
+			// 返回时刷新 SDK 实时会话；历史会话由点击页签触发。
 			this.currentTime = Date.now()
 			this.loadConversations()
-			this.loadHistoryConversations()
+		},
+		onReachBottom() {
+			this.loadMoreHistoryConversations()
 		},
 		onUnload() {
 			this._conversationPageAlive = false
@@ -170,6 +183,11 @@
 			if (this._conversationRefreshTimer) clearTimeout(this._conversationRefreshTimer)
 		},
 		methods: {
+			switchTab(tab) {
+				this.activeTab = tab
+				this.closeSwipedConversation()
+				if (tab === 'history') return this.requestHistoryConversations()
+			},
 			formatMessagePreview(message) {
 				return String(message === null || message === undefined ? '' : message).replace(/[\r\n]+/g, ' ')
 			},
@@ -605,45 +623,97 @@
 
 				return this._conversationLoadPromise
 			},
+			requestHistoryConversations() {
+				if (!this._conversationPageAlive) return
+				this._historyConversationsRequested = true
+				this._historyConversationsLoaded = false
+				this._historyConversationRequestId += 1
+				this._historyConversationLoadPromise = null
+				this._historyConversationLoadMorePromise = null
+				this.historyConversations = []
+				this.historyPage = 0
+				this.historyLoadError = ''
+				this.hasMoreHistoryConversations = false
+				this.isHistoryLoadingMore = false
+				this.historyLoadMoreError = ''
+				return this.loadHistoryConversations()
+			},
 			async loadHistoryConversations() {
-				if (!this._conversationPageAlive || this._historyConversationsLoaded) return
+				if (!this._conversationPageAlive || !this._historyConversationsRequested || this._historyConversationsLoaded) return
 				if (!isNimLoggedIn()) {
 					const loginError = getNimLoginError()
-					if (loginError) {
-						this.handleNimLoginFailed(loginError)
-						return
-					}
-					this.isHistoryLoading = !this.historyConversations.length
+					if (loginError) this.handleNimLoginFailed(loginError)
+					else this.isHistoryLoading = true
 					return
 				}
 				if (this._historyConversationLoadPromise) return this._historyConversationLoadPromise
 
-				this.isHistoryLoading = !this.historyConversations.length
+				this.isHistoryLoading = true
 				this.historyLoadError = ''
-				this._historyConversationLoadPromise = getAllHistoryConversations()
+				const requestId = this._historyConversationRequestId
+				this._historyConversationLoadPromise = getHistoryConversationsPage(1)
 					.then(conversationList => {
-						if (!this._conversationPageAlive) return
+						if (!this._conversationPageAlive || requestId !== this._historyConversationRequestId) return
 						this.historyConversations = conversationList
+						this.historyPage = conversationList.length ? 1 : 0
+						this.hasMoreHistoryConversations = conversationList.length > 0
 						this._historyConversationsLoaded = true
 					})
 					.catch(error => {
-						if (!this._conversationPageAlive) return
+						if (!this._conversationPageAlive || requestId !== this._historyConversationRequestId) return
 						console.error('[NIM] 获取历史会话列表失败', error)
-						this.historyLoadError = error && error.message ?
-							error.message :
-							'历史会话加载失败'
+						this.historyLoadError = error && error.message ? error.message : '历史会话加载失败'
 					})
 					.finally(() => {
-						if (this._conversationPageAlive) this.isHistoryLoading = false
-						this._historyConversationLoadPromise = null
+						if (requestId === this._historyConversationRequestId) {
+							if (this._conversationPageAlive) this.isHistoryLoading = false
+							this._historyConversationLoadPromise = null
+						}
 					})
-
 				return this._historyConversationLoadPromise
+			},
+			async loadMoreHistoryConversations() {
+				if (this.activeTab !== 'history' || !this._historyConversationsLoaded ||
+					!this.hasMoreHistoryConversations) return
+				if (this._historyConversationLoadMorePromise) return this._historyConversationLoadMorePromise
+
+				const nextPage = this.historyPage + 1
+				const requestId = this._historyConversationRequestId
+				this.isHistoryLoadingMore = true
+				this.historyLoadMoreError = ''
+				this._historyConversationLoadMorePromise = getHistoryConversationsPage(nextPage)
+					.then(conversationList => {
+						if (!this._conversationPageAlive || requestId !== this._historyConversationRequestId) return
+						if (!conversationList.length) {
+							this.hasMoreHistoryConversations = false
+							return
+						}
+						const knownIds = new Set(this.historyConversations.map(item => String(item.targetId)))
+						const newConversations = conversationList.filter(item => {
+							const id = String(item.targetId || '')
+							if (!id || knownIds.has(id)) return false
+							knownIds.add(id)
+							return true
+						})
+						this.historyConversations = this.historyConversations.concat(newConversations)
+						this.historyPage = nextPage
+					})
+					.catch(error => {
+						if (!this._conversationPageAlive || requestId !== this._historyConversationRequestId) return
+						console.error('[NIM] 加载更多历史会话失败', error)
+						this.historyLoadMoreError = error && error.message ? error.message : '历史会话加载失败'
+					})
+					.finally(() => {
+						if (requestId === this._historyConversationRequestId) {
+							if (this._conversationPageAlive) this.isHistoryLoadingMore = false
+							this._historyConversationLoadMorePromise = null
+						}
+					})
+				return this._historyConversationLoadMorePromise
 			},
 			retryVisibleConversations() {
 				if (this.activeTab === 'history') {
-					this.loadHistoryConversations()
-					return
+					return this.requestHistoryConversations()
 				}
 				this.loadConversations()
 			},
@@ -1011,6 +1081,14 @@
 				}
 			}
 
+			.history-more {
+				padding: 28rpx;
+				text-align: center;
+				font-size: 24rpx;
+				color: #999999;
+				&.is-error { color: #f37324; }
+			}
+
 			.list-state {
 				display: flex;
 				align-items: center;
@@ -1018,6 +1096,20 @@
 				height: 240rpx;
 				font-size: 26rpx;
 				color: #999999;
+
+				&.is-empty {
+					flex-direction: column;
+					min-height: calc(100vh - 208rpx);
+					height: auto;
+					text-align: center;
+				}
+
+				.empty-image {
+					display: block;
+					width: 330rpx;
+					height: 175rpx;
+					margin-bottom: 20rpx;
+				}
 
 				&.is-error {
 					color: #f37324;

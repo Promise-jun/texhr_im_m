@@ -28,100 +28,117 @@
 			@click="closePanel">
 			<view class="message-content" :class="{ 'message-content--limits-error': chatLimitErrorMessage }">
 				<view v-if="chatLimitErrorMessage" class="chat-limit-error-state">
-					<image src="../../../static/empty_content.jpg" class="chat-limit-error-image" mode="aspectFit"></image>
+					<image src="../../../static/empty_content.jpg" class="chat-limit-error-image" mode="aspectFit">
+					</image>
 					<text class="chat-limit-error-message">{{ chatLimitErrorMessage }}</text>
 					<button class="chat-limit-error-button" @click.stop="navigateBack">知道了</button>
 				</view>
 				<template v-else>
-				<view class="load-status" :class="{ 'load-status--error': historyLoadError }" @click="retryChatLoad">
-					<text v-if="isCheckingLimits">正在检查沟通状态...</text>
-					<text v-else-if="isWaitingForNim">正在连接聊天服务...</text>
-					<text v-else-if="isLoadingHistory">正在加载更早消息...</text>
-					<text v-else-if="historyLoadError">{{ historyLoadError }}，点击重试</text>
-					<text v-else-if="historyExhausted && messages.length">没有更早的消息了</text>
-					<text v-else-if="messages.length">下拉加载更多消息</text>
-				</view>
-
-				<view v-if="!isChatLoading && !historyLoadError && !displayMessages.length" class="empty-state">
-					暂无聊天消息
-				</view>
-
-				<template v-for="message in displayMessages">
-					<view v-if="message.type === 'time'" :id="messageAnchor(message.id)" :key="message.id"
-						class="time-divider">
-						{{ message.content }}
+					<view class="load-status" :class="{ 'load-status--error': historyLoadError }"
+						@click="retryChatLoad">
+						<text v-if="isCheckingLimits"></text>
+						<text v-else-if="isWaitingForNim">正在连接聊天服务...</text>
+						<text v-else-if="isLoadingHistory">正在加载更早消息...</text>
+						<text v-else-if="historyLoadError">{{ historyLoadError }}，点击重试</text>
+						<text v-else-if="historyExhausted && messages.length"></text>
+						<text v-else-if="messages.length">下拉加载更多消息</text>
 					</view>
-					<view v-else-if="message.type === 'system'" :id="messageAnchor(message.id)" :key="message.id"
-						class="system-message">
-						{{ message.content }}
+
+					<view v-if="!isChatLoading && !historyLoadError && !displayMessages.length" class="empty-state">
+						暂无聊天消息
 					</view>
-					<view v-else-if="message.type === 'revoked'" :id="messageAnchor(message.id)" :key="message.id"
-						class="revoked-message">
-						<view class="revoked-message-inner">
-							<text class="revoked-message-text">{{ message.content }}</text>
-							<text class="revoked-message-edit" @click.stop="reEditMessage(message)">重新编辑</text>
+
+					<template v-for="message in displayMessages">
+						<view v-if="message.type === 'time'" :id="messageAnchor(message.id)" :key="message.id"
+							class="time-divider">
+							{{ message.content }}
 						</view>
-					</view>
-					<view v-else :id="messageAnchor(message.id)" :key="message.id" class="message-row"
-						:class="[message.direction, { 'message-row--job-card': message.type === 'job-card' }]">
-						<image v-if="message.type !== 'job-card'" :src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
-							mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
-						<view class="message-bubble"
-							:class="{ 'message-bubble--image': message.type === 'image', 'message-bubble--audio': message.type === 'audio', 'message-bubble--job-card': message.type === 'job-card' }"
-							:style="message.type === 'audio' ? { width: audioBubbleWidth(message) } : null"
-							@click.stop="message.type === 'audio' && playAudioMessage(message)"
-							@longpress.stop.prevent="isTextMessage(message) && handleMessageLongPress(message)">
-							<!-- status 有值时保留彩色和薪资，否则整张卡片置灰并显示已失效。 -->
-							<view v-if="message.type === 'job-card'" class="job-message-card"
-								:style="{ filter: message.job.status ? 'grayscale(0)' : 'grayscale(1)' }"
-								@click.stop="handleJobCardClick(message)">
-								<view class="job-message-heading">
-									<text class="job-message-name">{{ message.job.JobName || '职位信息' }}</text>
-									<text class="job-message-salary">{{ message.job.status ? message.job.Salary : '已失效' }}</text>
-								</view>
-								<text v-if="message.job.CompanyName" class="job-message-company">{{ message.job.CompanyName }}</text>
-								<view v-if="message.job.Location || message.job.Experience || message.job.Education" class="job-message-requirements">
-									<view v-if="message.job.Location" class="job-message-requirement">
-										<image src="../../../static/icon_location.png" class="job-message-icon" mode="aspectFit"></image>
-										<text>{{ message.job.Location }}</text>
-									</view>
-									<view v-if="message.job.Experience" class="job-message-requirement">
-										<image src="../../../static/icon_work.png" class="job-message-icon" mode="aspectFit"></image>
-										<text>{{ message.job.Experience }}</text>
-									</view>
-									<view v-if="message.job.Education" class="job-message-requirement">
-										<image src="../../../static/icon_edu.png" class="job-message-icon" mode="aspectFit"></image>
-										<text>{{ message.job.Education }}</text>
-									</view>
-								</view>
-								<view v-if="message.job.Logo || message.job.EnterpriseManager || message.job.EnterpriseManagerPost"
-									class="job-message-manager">
-									<image :src="failedJobLogoIds.includes(message.id) ? defaultEnterpriseLogo : (message.job.Logo || defaultEnterpriseLogo)" class="job-message-logo"
-										mode="aspectFit" @error="handleJobLogoError(message)"></image>
-									<text v-if="message.job.EnterpriseManager" class="job-message-manager-name">{{ message.job.EnterpriseManager }}</text>
-									<text v-if="message.job.EnterpriseManagerPost" class="job-message-manager-post">{{ message.job.EnterpriseManagerPost }}</text>
-								</view>
-								<!-- 卡片底部直接展示 EnterpriseTime，不额外拼接提示内容。 -->
-								<view v-if="message.job.EnterpriseTime" class="job-message-tip">{{ message.job.EnterpriseTime }}</view>
-							</view>
-							<image v-else-if="message.type === 'image'" :src="message.url" class="message-image"
-								mode="widthFix" @click.stop="previewImage(message.url)"></image>
-							<view v-else-if="message.type === 'audio'" class="audio-message-content">
-								<text class="audio-message-icon">{{ audioPlayingId === message.id ? '❚❚' : '▶' }}</text>
-								<text class="audio-message-duration">{{ message.durationSeconds }}"</text>
-							</view>
-							<view v-else class="message-text">
-								<block v-for="(segment, segmentIndex) in message.segments" :key="segmentIndex">
-									<image v-if="segment.type === 'emoji'" :src="segment.url" :aria-label="segment.key"
-										class="message-emoji" mode="aspectFit"></image>
-									<text v-else class="message-text-copy">{{ segment.content }}</text>
-								</block>
+						<view v-else-if="message.type === 'system'" :id="messageAnchor(message.id)" :key="message.id"
+							class="system-message">
+							{{ message.content }}
+						</view>
+						<view v-else-if="message.type === 'revoked'" :id="messageAnchor(message.id)" :key="message.id"
+							class="revoked-message">
+							<view class="revoked-message-inner">
+								<text class="revoked-message-text">{{ message.content }}</text>
+								<text v-if="message.direction === 'self'" class="revoked-message-edit"
+									@click.stop="reEditMessage(message)">重新编辑</text>
 							</view>
 						</view>
-					</view>
-				</template>
+						<view v-else :id="messageAnchor(message.id)" :key="message.id" class="message-row"
+							:class="[message.direction, { 'message-row--job-card': message.type === 'job-card' }]">
+							<image v-if="message.type !== 'job-card'"
+								:src="message.direction === 'self' ? selfAvatar : otherAvatar" class="message-avatar"
+								mode="aspectFill" @error="handleAvatarError(message.direction)"></image>
+							<view class="message-bubble"
+								:class="{ 'message-bubble--image': message.type === 'image', 'message-bubble--audio': message.type === 'audio', 'message-bubble--job-card': message.type === 'job-card' }"
+								:style="message.type === 'audio' ? { width: audioBubbleWidth(message) } : null"
+								@click.stop="message.type === 'audio' && playAudioMessage(message)"
+								@longpress.stop.prevent="isTextMessage(message) && handleMessageLongPress(message)">
+								<!-- status 有值时保留彩色和薪资，否则整张卡片置灰并显示已失效。 -->
+								<view v-if="message.type === 'job-card'" class="job-message-card"
+									:style="{ filter: message.job.status ? 'grayscale(0)' : 'grayscale(1)' }"
+									@click.stop="handleJobCardClick(message)">
+									<view class="job-message-heading">
+										<text class="job-message-name">{{ message.job.JobName || '职位信息' }}</text>
+										<text
+											class="job-message-salary">{{ message.job.status ? message.job.Salary : '已失效' }}</text>
+									</view>
+									<text v-if="message.job.CompanyName"
+										class="job-message-company">{{ message.job.CompanyName }}</text>
+									<view v-if="message.job.Location || message.job.Experience || message.job.Education"
+										class="job-message-requirements">
+										<view v-if="message.job.Location" class="job-message-requirement">
+											<image src="../../../static/icon_location.png" class="job-message-icon"
+												mode="aspectFit"></image>
+											<text>{{ message.job.Location }}</text>
+										</view>
+										<view v-if="message.job.Experience" class="job-message-requirement">
+											<image src="../../../static/icon_work.png" class="job-message-icon"
+												mode="aspectFit"></image>
+											<text>{{ message.job.Experience }}</text>
+										</view>
+										<view v-if="message.job.Education" class="job-message-requirement">
+											<image src="../../../static/icon_edu.png" class="job-message-icon"
+												mode="aspectFit"></image>
+											<text>{{ message.job.Education }}</text>
+										</view>
+									</view>
+									<view
+										v-if="message.job.Logo || message.job.EnterpriseManager || message.job.EnterpriseManagerPost"
+										class="job-message-manager">
+										<image
+											:src="failedJobLogoIds.includes(message.id) ? defaultEnterpriseLogo : (message.job.Logo || defaultEnterpriseLogo)"
+											class="job-message-logo" mode="aspectFit"
+											@error="handleJobLogoError(message)"></image>
+										<text v-if="message.job.EnterpriseManager"
+											class="job-message-manager-name">{{ message.job.EnterpriseManager }}</text>
+										<text v-if="message.job.EnterpriseManagerPost"
+											class="job-message-manager-post">{{ message.job.EnterpriseManagerPost }}</text>
+									</view>
+									<!-- 卡片底部直接展示 EnterpriseTime，不额外拼接提示内容。 -->
+									<view v-if="message.job.EnterpriseTime" class="job-message-tip">
+										{{ message.job.EnterpriseTime }}</view>
+								</view>
+								<image v-else-if="message.type === 'image'" :src="message.url" class="message-image"
+									mode="widthFix" @click.stop="previewImage(message.url)"></image>
+								<view v-else-if="message.type === 'audio'" class="audio-message-content">
+									<text
+										class="audio-message-icon">{{ audioPlayingId === message.id ? '❚❚' : '▶' }}</text>
+									<text class="audio-message-duration">{{ message.durationSeconds }}"</text>
+								</view>
+								<view v-else class="message-text">
+									<block v-for="(segment, segmentIndex) in message.segments" :key="segmentIndex">
+										<image v-if="segment.type === 'emoji'" :src="segment.url"
+											:aria-label="segment.key" class="message-emoji" mode="aspectFit"></image>
+										<text v-else class="message-text-copy">{{ segment.content }}</text>
+									</block>
+								</view>
+							</view>
+						</view>
+					</template>
 
-				<view id="message-bottom" class="message-bottom"></view>
+					<view id="message-bottom" class="message-bottom"></view>
 				</template>
 			</view>
 		</scroll-view>
@@ -134,8 +151,8 @@
 				<input v-if="!isVoiceMode" v-model.trim="draft" class="message-input" :focus="inputFocused"
 					confirm-type="send" cursor-spacing="18" maxlength="500" placeholder="输入消息" @focus="handleInputFocus"
 					@confirm="sendMessage" />
-				<image v-if="!isVoiceMode" src="../../../static/icon_audio_btn.png" class="round-button" mode="aspectFit"
-					@click="enterVoiceMode"></image>
+				<image v-if="!isVoiceMode" src="../../../static/icon_audio_btn.png" class="round-button"
+					mode="aspectFit" @click="enterVoiceMode"></image>
 				<button v-else class="voice-button" @touchstart.stop.prevent="startVoiceRecording"
 					@touchmove.stop.prevent="updateVoiceRecordingGesture" @touchend.stop.prevent="finishVoiceRecording"
 					@touchcancel.stop.prevent="cancelVoiceRecording">按住 说话</button>
@@ -144,7 +161,8 @@
 					@click="sendMessage">
 					{{ isSendingMessage ? '发送中' : '发送' }}
 				</button>
-				<image v-else src="../../../static/icon_add.png" class="round-button" @click="togglePanel('more')"></image>
+				<image v-else src="../../../static/icon_add.png" class="round-button" @click="togglePanel('more')">
+				</image>
 			</view>
 
 			<view v-if="activePanel" class="extension-panel"
@@ -161,8 +179,8 @@
 							@click="usePhrase(phrase.message)">
 							<text class="phrase-message">{{ phrase.message }}</text>
 							<view v-if="isEditingCommonPhrases" class="phrase-item-actions">
-								<image src="../../../static/icon_edit.png" class="phrase-item-action-icon" mode="aspectFit"
-									@click.stop="handleCommonPhraseAction('edit', phrase)"></image>
+								<image src="../../../static/icon_edit.png" class="phrase-item-action-icon"
+									mode="aspectFit" @click.stop="handleCommonPhraseAction('edit', phrase)"></image>
 								<image src="../../../static/icon_close.png" class="phrase-item-action-icon"
 									:class="{ 'phrase-item-action-icon--disabled': deletingCommonPhraseId === phrase.id }"
 									mode="aspectFit" @click.stop="handleCommonPhraseAction('delete', phrase)"></image>
@@ -199,23 +217,27 @@
 		<transition name="voice-record">
 			<view v-if="isRecording || isTranscribingVoice" class="voice-record-mask"
 				:class="{ 'voice-record-mask--transcribing': isTranscribingVoice }"
-				@touchmove.stop.prevent="updateVoiceRecordingGesture"
-				@touchend.stop.prevent="finishVoiceRecording" @touchcancel.stop.prevent="cancelVoiceRecording">
+				@touchmove.stop.prevent="updateVoiceRecordingGesture" @touchend.stop.prevent="finishVoiceRecording"
+				@touchcancel.stop.prevent="cancelVoiceRecording">
 				<view class="voice-record-send-zone"
-					:class="{ 'voice-record-send-zone--active': recordingGesture === 'send' && !isTranscribingVoice }"></view>
+					:class="{ 'voice-record-send-zone--active': recordingGesture === 'send' && !isTranscribingVoice }">
+				</view>
 				<view class="voice-record-card">
 					<view class="voice-wave" :class="{ 'voice-wave--warning': recordingCountdown > 0 }">
 						<text v-for="bar in voiceWaveBars" :key="bar" class="voice-wave-bar"
 							:style="{ animationDelay: `${(bar % 7) * -0.09}s` }"></text>
 					</view>
 					<text class="voice-record-status">{{ recordingStatusText }}</text>
-					<text v-if="recordingCountdown > 0" class="voice-record-countdown">还剩 {{ recordingCountdown }} 秒</text>
+					<text v-if="recordingCountdown > 0" class="voice-record-countdown">还剩 {{ recordingCountdown }}
+						秒</text>
 				</view>
 				<view class="voice-record-actions">
-					<view class="voice-record-action" :class="{ 'voice-record-action--active': recordingGesture === 'cancel' }">
+					<view class="voice-record-action"
+						:class="{ 'voice-record-action--active': recordingGesture === 'cancel' }">
 						<text>取消</text>
 					</view>
-					<view class="voice-record-action" :class="{ 'voice-record-action--active': recordingGesture === 'transcribe' }">
+					<view class="voice-record-action"
+						:class="{ 'voice-record-action--active': recordingGesture === 'transcribe' }">
 						<text>滑到这里 转文字</text>
 					</view>
 				</view>
@@ -226,8 +248,7 @@
 		<view v-if="showVoiceTextEditor" class="voice-text-mask" @click.stop>
 			<view class="voice-text-close" @click="discardPendingVoice">×</view>
 			<view class="voice-text-editor-wrap">
-				<textarea v-model="transcribedText" class="voice-text-editor" maxlength="500"
-					placeholder="语音转文字结果" />
+				<textarea v-model="transcribedText" class="voice-text-editor" maxlength="500" placeholder="语音转文字结果" />
 			</view>
 			<view class="voice-text-footer">
 				<view class="voice-text-action voice-text-action--audio" @click="sendPendingVoice">
@@ -297,8 +318,13 @@
 	import {
 		requestApi
 	} from '../../../services/request'
-	import { DEFAULT_TALENT_AVATAR, getTalentAvatar } from '../../../services/talent-avatar'
-	import { maskPhoneNumbers } from '../../../services/mask-phone'
+	import {
+		DEFAULT_TALENT_AVATAR,
+		getTalentAvatar
+	} from '../../../services/talent-avatar'
+	import {
+		maskPhoneNumbers
+	} from '../../../services/mask-phone'
 	import {
 		NIM_EVENT,
 		clearActiveConversationId,
@@ -308,7 +334,8 @@
 		setActiveConversationId
 	} from '../../../services/nim'
 	import {
-		markNimConversationRead, sendNimP2PReadReceipt
+		markNimConversationRead,
+		sendNimP2PReadReceipt
 	} from '../../../services/conversation'
 	import {
 		NIM_EMOJIS,
@@ -489,6 +516,14 @@
 		return error && error.message ? error.message : fallbackMessage
 	}
 
+	function matchesRevokeRefer(message, refer) {
+		if (!message || !refer || !refer.conversationId || message.conversationId !== refer.conversationId) return false
+		return Boolean((refer.messageClientId && message.messageClientId && String(refer.messageClientId) === String(
+				message.messageClientId)) ||
+			(refer.messageServerId && message.messageServerId && String(refer.messageServerId) === String(message
+				.messageServerId)))
+	}
+
 	function getMessageId(message) {
 		if (message && message.messageClientId) return String(message.messageClientId)
 		if (message && message.messageServerId) return String(message.messageServerId)
@@ -580,7 +615,8 @@
 			.find(value => typeof value === 'string' && /^audio\//i.test(value.trim()))
 		if (declaredType) {
 			const normalized = declaredType.trim().toLowerCase()
-			if (normalized === 'audio/m4a' || normalized === 'audio/x-m4a' || normalized === 'audio/x-mp4') return 'audio/mp4'
+			if (normalized === 'audio/m4a' || normalized === 'audio/x-m4a' || normalized === 'audio/x-mp4')
+			return 'audio/mp4'
 			if (normalized === 'audio/x-wav') return 'audio/wav'
 			return normalized
 		}
@@ -616,10 +652,9 @@
 			return {
 				...base,
 				type: 'revoked',
-				content: REVOKED_MESSAGE_TEXT,
+				content: base.direction === 'self' ? REVOKED_MESSAGE_TEXT : '对方撤回了一条消息',
 				originalText: message.revokedText !== undefined ?
-					String(message.revokedText) :
-					String(message.text || '')
+					String(message.revokedText) : String(message.text || '')
 			}
 		}
 
@@ -855,11 +890,16 @@
 			const rawSuccessStep = options.successStep
 			if (rawSuccessStep && typeof rawSuccessStep === 'object') this.initialSuccessStep = rawSuccessStep
 			else if (typeof rawSuccessStep === 'string' && rawSuccessStep.trim()) {
-				try { this.initialSuccessStep = JSON.parse(rawSuccessStep) } catch (error) {
-					try { this.initialSuccessStep = JSON.parse(decodeURIComponent(rawSuccessStep)) } catch (decodeError) {}
+				try {
+					this.initialSuccessStep = JSON.parse(rawSuccessStep)
+				} catch (error) {
+					try {
+						this.initialSuccessStep = JSON.parse(decodeURIComponent(rawSuccessStep))
+					} catch (decodeError) {}
 				}
 			}
-			if (!this.initialSuccessStep || typeof this.initialSuccessStep !== 'object' || Array.isArray(this.initialSuccessStep)) {
+			if (!this.initialSuccessStep || typeof this.initialSuccessStep !== 'object' || Array.isArray(this
+					.initialSuccessStep)) {
 				this.initialSuccessStep = null
 			}
 			const systemInfo = uni.getSystemInfoSync()
@@ -886,7 +926,8 @@
 			this._chatPageAlive = false
 			this._chatPageVisible = false
 			// #ifdef H5
-			if (typeof document !== 'undefined' && this._chatVisibilityHandler) document.removeEventListener('visibilitychange', this._chatVisibilityHandler)
+			if (typeof document !== 'undefined' && this._chatVisibilityHandler) document.removeEventListener(
+				'visibilitychange', this._chatVisibilityHandler)
 			// #endif
 			this._pendingChatGreeting = null
 			// 离开聊天页后恢复消息列表页的其它会话红点判断。
@@ -920,7 +961,7 @@
 				markNimConversationRead(this.conversationId).catch(error => console.warn('[Chat] 清除会话未读数失败', error))
 				const conversationId = this.conversationId
 				sendNimP2PReadReceipt(conversationId, this.messages, () => this._chatPageAlive && this._chatPageVisible &&
-					this.conversationId === conversationId && (typeof document === 'undefined' || !document.hidden))
+						this.conversationId === conversationId && (typeof document === 'undefined' || !document.hidden))
 					.catch(error => console.warn('[Chat] 发送已读回执失败', error))
 			},
 			bindNimLoginEvents() {
@@ -1009,7 +1050,7 @@
 						return
 					}
 
-					// Limits 返回的职位是当前会话的实际职位；与页面职位不一致时，先询问是否切换。
+					// 职位切换提示不阻断会话初始化，历史消息等流程继续执行。
 					const returnedJobId = data.JobId !== undefined ? data.JobId : response.JobId
 					const normalizedReturnedJobId = returnedJobId === undefined || returnedJobId === null ?
 						'' : String(returnedJobId).trim()
@@ -1030,7 +1071,6 @@
 								}
 							}
 						})
-						return
 					}
 
 					// 职位一致且 Limits 返回了 Message 时，获取默认招呼语并按约定发送两条云信消息。
@@ -1049,7 +1089,8 @@
 					const hasLimitsMessage = typeof limitsMessage === 'string' ?
 						limitsMessage.trim().length > 0 :
 						limitsMessage !== undefined && limitsMessage !== null
-					if (!this._skipInitialChatGreeting && normalizedReturnedJobId === normalizedCurrentJobId && hasLimitsMessage) {
+					if (!this._skipInitialChatGreeting && normalizedReturnedJobId === normalizedCurrentJobId &&
+						hasLimitsMessage) {
 						try {
 							await this.loadChatGreeting(limitsMessage, normalizedCurrentJobId)
 						} catch (error) {
@@ -1091,20 +1132,25 @@
 			},
 			async checkChatLimitsBeforeSend() {
 				const jobId = this.jobId === undefined || this.jobId === null ? '' : String(this.jobId).trim()
-				const resumeId = this.resumeId === undefined || this.resumeId === null ? '' : String(this.resumeId).trim()
+				const resumeId = this.resumeId === undefined || this.resumeId === null ? '' : String(this.resumeId)
+					.trim()
 				if (!jobId) throw new Error('缺少 jobId')
 				const conversationId = this.conversationId
 				const enterpriseAccId = this.enterpriseAccId
 				const response = await requestApi({
 					Name: CHAT_LIMITS_API,
-					Content: { JobId: jobId, ResumeId: resumeId }
+					Content: {
+						JobId: jobId,
+						ResumeId: resumeId
+					}
 				})
 				if (!this._chatPageAlive || this.conversationId !== conversationId ||
 					String(this.jobId || '').trim() !== jobId || String(this.resumeId || '').trim() !== resumeId ||
 					this.enterpriseAccId !== enterpriseAccId) return false
 				if (!response || Number(response.Code) !== 0) {
 					const code = response && response.Code !== undefined ? response.Code : 'unknown'
-					const errorMessage = response && typeof response.ErrorMessage === 'string' ? response.ErrorMessage.trim() : ''
+					const errorMessage = response && typeof response.ErrorMessage === 'string' ? response.ErrorMessage
+						.trim() : ''
 					throw new Error(errorMessage || `获取沟通状态失败，业务错误码：${code}`)
 				}
 				const data = parseResponseData(response.Data, '沟通限制接口返回的数据格式不正确')
@@ -1166,7 +1212,8 @@
 							type: 4,
 							data: pendingGreeting.limitsMessage
 						}))
-						const customResult = await messageService.sendMessage(customMessage, this.conversationId)
+						const customResult = await messageService.sendMessage(customMessage, this
+							.conversationId)
 						if (!customResult || !customResult.message) {
 							throw new Error('招呼语自定义消息发送失败：SDK 未返回消息')
 						}
@@ -1175,7 +1222,8 @@
 					}
 
 					if (!await this.checkChatLimitsBeforeSend()) return
-					const textMessage = messageCreator.createTextMessage(maskPhoneNumbers(pendingGreeting.greetingText))
+					const textMessage = messageCreator.createTextMessage(maskPhoneNumbers(pendingGreeting
+						.greetingText))
 					const textResult = await messageService.sendMessage(textMessage, this.conversationId)
 					if (!textResult || !textResult.message) throw new Error('默认招呼语文本发送失败：SDK 未返回消息')
 					await this.mergeMessages([textResult.message])
@@ -1194,12 +1242,18 @@
 				const targetEnterpriseAccId = enterpriseAccId === undefined || enterpriseAccId === null ?
 					this.enterpriseAccId : String(enterpriseAccId).trim()
 				if (!targetJobId || !this.personAccId || !targetEnterpriseAccId) {
-					uni.showToast({ title: '缺少切换聊天职位所需信息', icon: 'none' })
+					uni.showToast({
+						title: '缺少切换聊天职位所需信息',
+						icon: 'none'
+					})
 					return
 				}
 
 				this.isSwitchingChatJob = true
-				uni.showLoading({ title: '切换中', mask: true })
+				uni.showLoading({
+					title: '切换中',
+					mask: true
+				})
 				try {
 					const response = await requestApi({
 						Name: CHANGE_CHAT_JOB_API,
@@ -1238,12 +1292,16 @@
 					}
 					const messageService = nim.V2NIMMessageService
 					if (!messageService || typeof messageService.sendMessage !== 'function' ||
-						!nim.V2NIMMessageCreator || typeof nim.V2NIMMessageCreator.createCustomMessage !== 'function') {
+						!nim.V2NIMMessageCreator || typeof nim.V2NIMMessageCreator.createCustomMessage !== 'function'
+						) {
 						throw new Error('当前聊天服务不支持发送自定义消息')
 					}
 
 					// 职位切换成功后发送自定义消息，消息体固定为 { type: 5, data: Enterprise }。
-					const customMessageBody = { type: 5, data: enterprise }
+					const customMessageBody = {
+						type: 5,
+						data: enterprise
+					}
 					const message = nim.V2NIMMessageCreator.createCustomMessage('', JSON.stringify(customMessageBody))
 					if (!await this.checkChatLimitsBeforeSend()) return
 					const result = await messageService.sendMessage(message, this.conversationId)
@@ -1320,7 +1378,8 @@
 					this.conversationId = nim.V2NIMConversationIdUtil.p2pConversationId(this
 						.enterpriseAccId)
 					// 标记当前前台会话：列表页收到消息事件时不为该会话重复显示红点。
-					if (this._chatPageVisible && (typeof document === 'undefined' || !document.hidden)) setActiveConversationId(this.conversationId)
+					if (this._chatPageVisible && (typeof document === 'undefined' || !document.hidden))
+						setActiveConversationId(this.conversationId)
 					// 双方用户资料与历史消息并行获取，头像返回后 Vue 会自动刷新消息头像。
 					this.loadSelfUserProfile()
 					this.loadOtherUserProfile()
@@ -1448,12 +1507,28 @@
 				if (this._messageEventsBound) return
 				// 消息监听已在 services/nim.js 单例层注册，这里只订阅页面级事件。
 				uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
+				uni.$on(NIM_EVENT.MESSAGE_REVOKED, this.handleMessageRevoked)
 				this._messageEventsBound = true
 			},
 			unbindMessageEvents() {
 				if (!this._messageEventsBound) return
 				uni.$off(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
+				uni.$off(NIM_EVENT.MESSAGE_REVOKED, this.handleMessageRevoked)
 				this._messageEventsBound = false
+			},
+			handleMessageRevoked(notifications) {
+				const refs = (Array.isArray(notifications) ? notifications : [])
+					.map(item => item && item.messageRefer)
+					.filter(refer => refer && refer.conversationId === this.conversationId && (refer.messageClientId ||
+						refer.messageServerId))
+				if (!refs.length) return
+				this._messageRevokeRefs = (this._messageRevokeRefs || []).concat(refs)
+				this.messages = this.messages.map(message => refs.some(refer => matchesRevokeRefer(message, refer)) ? {
+					...message,
+					isRevoked: true
+				} : message)
+				if (this.audioPlayingId && this.messages.some(message => getMessageId(message) === this.audioPlayingId &&
+						message.isRevoked)) this.destroyAudioPlayer()
 			},
 			handleReceiveMessages(messageList) {
 				// SDK 会同时推送其他会话的新消息，详情页只接收当前会话的数据。
@@ -1476,16 +1551,20 @@
 					if (customType !== 4 && customType !== 5) return message
 
 					const job = parseJobMessageData(payload.data)
-					const jobId = job && job.JobId !== undefined && job.JobId !== null ? String(job.JobId).trim() : ''
+					const jobId = job && job.JobId !== undefined && job.JobId !== null ? String(job.JobId).trim() :
+						''
 					if (!jobId) return addCustomMessageJobStatus(message, payload, false)
 
 					return requestApi({
 							Name: CHAT_GET_JOB_STATE_API,
-							Content: { JobId: jobId }
+							Content: {
+								JobId: jobId
+							}
 						})
 						.then(response => {
 							if (!response || Number(response.Code) !== 0) {
-								const code = response && response.Code !== undefined ? response.Code : 'unknown'
+								const code = response && response.Code !== undefined ? response.Code :
+									'unknown'
 								throw new Error(`获取职位状态失败，业务错误码：${code}`)
 							}
 							const data = parseResponseData(response.Data, '职位状态接口返回的数据格式不正确')
@@ -1509,7 +1588,16 @@
 				const messageMap = new Map(this.messages.map(message => [getMessageId(message), message]))
 				resolvedMessages.forEach(message => {
 					if (!message || message.isDelete) return
-					messageMap.set(getMessageId(message), message)
+					const id = getMessageId(message)
+					const previous = messageMap.get(id)
+					const revoked = (previous && previous.isRevoked) || (this._messageRevokeRefs || []).some(
+						refer => matchesRevokeRefer(message, refer))
+					messageMap.set(id, revoked ? {
+						...message,
+						isRevoked: true,
+						revokedText: previous && previous.revokedText !== undefined ? previous
+							.revokedText : message.revokedText
+					} : message)
 				})
 				this.messages = Array.from(messageMap.values()).sort((left, right) => {
 					const timeDiff = (Number(left.createTime) || 0) - (Number(right.createTime) || 0)
@@ -1587,9 +1675,7 @@
 			handleMessageLongPress(message) {
 				if (!this.isTextMessage(message) || !this.findRawMessage(message)) return
 
-				const actionKeys = message.direction === 'self' ?
-					['copy', 'revoke', 'delete'] :
-					['copy', 'delete']
+				const actionKeys = message.direction === 'self' ? ['copy', 'revoke', 'delete'] : ['copy', 'delete']
 				const actionLabels = {
 					copy: '复制',
 					revoke: '撤回',
@@ -1622,19 +1708,31 @@
 					String(rawMessage.text) :
 					String(message && message.content || '')
 				if (!content) {
-					uni.showToast({ title: '没有可复制的内容', icon: 'none' })
+					uni.showToast({
+						title: '没有可复制的内容',
+						icon: 'none'
+					})
 					return
 				}
 				if (typeof uni.setClipboardData !== 'function') {
-					uni.showToast({ title: '当前环境不支持复制', icon: 'none' })
+					uni.showToast({
+						title: '当前环境不支持复制',
+						icon: 'none'
+					})
 					return
 				}
 
 				uni.setClipboardData({
 					data: content,
-					success: () => uni.showToast({ title: '已复制', icon: 'none' }),
+					success: () => uni.showToast({
+						title: '已复制',
+						icon: 'none'
+					}),
 					fail: error => {
-						uni.showToast({ title: '复制失败', icon: 'none' })
+						uni.showToast({
+							title: '复制失败',
+							icon: 'none'
+						})
 						console.error('[Chat] 复制消息失败', error)
 					}
 				})
@@ -1688,10 +1786,13 @@
 				const originalText = message && message.originalText !== undefined ?
 					String(message.originalText) :
 					rawMessage && rawMessage.revokedText !== undefined ?
-						String(rawMessage.revokedText) :
-						''
+					String(rawMessage.revokedText) :
+					''
 				if (!originalText) {
-					uni.showToast({ title: '未获取到原消息内容', icon: 'none' })
+					uni.showToast({
+						title: '未获取到原消息内容',
+						icon: 'none'
+					})
 					return
 				}
 
@@ -1709,7 +1810,10 @@
 				const originalText = rawMessage.text !== undefined ? String(rawMessage.text) : ''
 				const messageService = getNimInstance().V2NIMMessageService
 				if (!messageService || typeof messageService.revokeMessage !== 'function') {
-					uni.showToast({ title: '当前聊天服务不支持撤回消息', icon: 'none' })
+					uni.showToast({
+						title: '当前聊天服务不支持撤回消息',
+						icon: 'none'
+					})
 					return
 				}
 
@@ -1717,12 +1821,14 @@
 				try {
 					await messageService.revokeMessage(rawMessage)
 					this.markMessageAsRevoked(message, originalText)
-					uni.showToast({ title: '消息已撤回', icon: 'none' })
+					uni.showToast({
+						title: '消息已撤回',
+						icon: 'none'
+					})
 				} catch (error) {
 					uni.showToast({
 						title: isMessageRevokeExpiredError(error) ?
-							MESSAGE_REVOKE_EXPIRED_MESSAGE :
-							error && error.message ? error.message : '撤回消息失败',
+							MESSAGE_REVOKE_EXPIRED_MESSAGE : error && error.message ? error.message : '撤回消息失败',
 						icon: 'none'
 					})
 					console.error('[Chat] 撤回消息失败', error)
@@ -1736,7 +1842,10 @@
 				const messageId = getMessageId(rawMessage)
 				const messageService = getNimInstance().V2NIMMessageService
 				if (!messageService || typeof messageService.deleteMessage !== 'function') {
-					uni.showToast({ title: '当前聊天服务不支持删除消息', icon: 'none' })
+					uni.showToast({
+						title: '当前聊天服务不支持删除消息',
+						icon: 'none'
+					})
 					return
 				}
 
@@ -1744,7 +1853,10 @@
 				try {
 					await messageService.deleteMessage(rawMessage)
 					this.removeMessage(message)
-					uni.showToast({ title: '消息已删除', icon: 'none' })
+					uni.showToast({
+						title: '消息已删除',
+						icon: 'none'
+					})
 				} catch (error) {
 					uni.showToast({
 						title: error && error.message ? error.message : '删除消息失败',
@@ -1760,13 +1872,18 @@
 			},
 			navigateByStep(stepName) {
 				const normalizedStepName = String(stepName || '').trim()
-				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '修改简历', '立即验证', '立即更新']
+				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '修改简历', '立即更新']
 				if (resumeStepNames.includes(normalizedStepName)) {
 					this.openMobileSiteUrl('https://m.texhr.cn/person/standardresume/myresume/')
 					return
 				}
-				if (normalizedStepName === '立即解除') {
-					this.openMobileSiteUrl('https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
+				if (normalizedStepName === '立即解除' || normalizedStepName === '解除') {
+					this.openMobileSiteUrl(
+						'https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
+					return
+				}
+				if (normalizedStepName === '立即验证') {
+					this.openMobileSiteUrl('https://m.texhr.cn/person/basicinformation/phoneview')
 					return
 				}
 				if (normalizedStepName === '知道了') {
@@ -1811,7 +1928,8 @@
 				// return
 				// #ifdef H5
 				if (typeof window !== 'undefined' && window.location) {
-					window.location.href = url
+					// window.location.href = url
+					location.replace(url)
 					return
 				}
 				// #endif
@@ -1896,7 +2014,8 @@
 					return
 				}
 
-				const query = `FromAccid=${encodeURIComponent(fromAccid)}&ToAccid=${encodeURIComponent(toAccid)}&reportType=person`
+				const query =
+					`FromAccid=${encodeURIComponent(fromAccid)}&ToAccid=${encodeURIComponent(toAccid)}&reportType=person`
 				this.openMobileSiteUrl(`https://m.texhr.cn/report/ChatReportView?${query}`)
 			},
 			async handleMessagePermissionAction() {
@@ -2150,14 +2269,14 @@
 					}
 
 					const successStep = data.SuccessStep || response.SuccessStep || data
-					const tips = successStep && successStep.Tips !== undefined
-						? String(successStep.Tips)
-						: response.Tips !== undefined ? String(response.Tips) : '投递成功，请静候佳音'
-					const buttonName = successStep && successStep.ButtonName !== undefined
-						? String(successStep.ButtonName)
-						: successStep && successStep.StepName !== undefined
-							? String(successStep.StepName)
-							: response.ButtonName !== undefined ? String(response.ButtonName) : '知道了'
+					const tips = successStep && successStep.Tips !== undefined ?
+						String(successStep.Tips) :
+						response.Tips !== undefined ? String(response.Tips) : '投递成功，请静候佳音'
+					const buttonName = successStep && successStep.ButtonName !== undefined ?
+						String(successStep.ButtonName) :
+						successStep && successStep.StepName !== undefined ?
+						String(successStep.StepName) :
+						response.ButtonName !== undefined ? String(response.ButtonName) : '知道了'
 
 					if (tips.includes('投递成功')) {
 						const resumeAction = this.actions.find(action => action.key === 'resume')
@@ -2171,8 +2290,12 @@
 						title: '温馨提示',
 						content: tips,
 						showCancel: false,
-						confirmText: buttonName || '确定',
-						success: () => this.navigateByStep(buttonName)
+						confirmText: buttonName || '知道了',
+						success: () => {
+							if (buttonName !== '知道了') {
+								this.navigateByStep(buttonName)
+							}
+						}
 					})
 				} catch (error) {
 					if (!this._chatPageAlive) return
@@ -2259,7 +2382,8 @@
 						if (!content) return null
 						const scrollHeight = Number(content.scrollHeight)
 						if (Number.isFinite(scrollHeight) && scrollHeight > 0) return scrollHeight
-						const rectHeight = content.getBoundingClientRect && content.getBoundingClientRect().height
+						const rectHeight = content.getBoundingClientRect && content.getBoundingClientRect()
+							.height
 						const height = Number(rectHeight)
 						return Number.isFinite(height) && height >= 0 ? height : null
 					}
@@ -2276,7 +2400,8 @@
 						let query = uni.createSelectorQuery()
 						if (typeof query.in === 'function') query = query.in(this) || query
 						const selector = query.select('.message-content')
-						if (!selector || typeof selector.boundingClientRect !== 'function' || typeof query.exec !== 'function') {
+						if (!selector || typeof selector.boundingClientRect !== 'function' || typeof query.exec !==
+							'function') {
 							finish(null)
 							return
 						}
@@ -2386,7 +2511,9 @@
 			 * App/小程序使用 RecorderManager，H5 使用浏览器 MediaRecorder。
 			 */
 			async startVoiceRecording() {
-				if (this.isRecording || this._voiceFinishing || this.isSendingMessage || this.isTranscribingVoice) return
+				this.destroyAudioPlayer()
+				if (this.isRecording || this._voiceFinishing || this.isSendingMessage || this.isTranscribingVoice)
+					return
 				if (!this.conversationId || !isNimLoggedIn()) {
 					uni.showToast({
 						title: '聊天服务尚未就绪',
@@ -2429,9 +2556,16 @@
 					const errorMessage = error && error.message ? error.message : '无法使用麦克风，请检查录音权限'
 					// 浏览器安全限制属于环境配置问题，用弹窗完整展示，避免 Toast 截断关键信息。
 					if (/HTTPS/i.test(errorMessage)) {
-						uni.showModal({ title: '无法录音', content: errorMessage, showCancel: false })
+						uni.showModal({
+							title: '无法录音',
+							content: errorMessage,
+							showCancel: false
+						})
 					} else {
-						uni.showToast({ title: errorMessage, icon: 'none' })
+						uni.showToast({
+							title: errorMessage,
+							icon: 'none'
+						})
 					}
 					console.warn('[Chat] 无法开始录音', error)
 				}
@@ -2469,7 +2603,9 @@
 						const recordError = new Error(error && error.errMsg ? error.errMsg : '录音失败')
 						if (this._voiceStartReject) this._voiceStartReject(recordError)
 						// stop promise 以普通结果结束，避免授权失败时产生无人接收的 Promise rejection。
-						if (this._voiceStopResolve) this._voiceStopResolve({ error: recordError })
+						if (this._voiceStopResolve) this._voiceStopResolve({
+							error: recordError
+						})
 						this._voiceStartResolve = null
 						this._voiceStartReject = null
 						this._voiceStopResolve = null
@@ -2522,7 +2658,9 @@
 
 				let stream
 				try {
-					stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+					stream = await navigator.mediaDevices.getUserMedia({
+						audio: true
+					})
 				} catch (error) {
 					const errorName = String(error && error.name || '')
 					if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
@@ -2534,8 +2672,11 @@
 					throw new Error(error && error.message ? error.message : '浏览器调用麦克风失败')
 				}
 				const mimeCandidates = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']
-				const mimeType = mimeCandidates.find(type => !MediaRecorder.isTypeSupported || MediaRecorder.isTypeSupported(type)) || ''
-				const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+				const mimeType = mimeCandidates.find(type => !MediaRecorder.isTypeSupported || MediaRecorder
+					.isTypeSupported(type)) || ''
+				const recorder = mimeType ? new MediaRecorder(stream, {
+					mimeType
+				}) : new MediaRecorder(stream)
 				const chunks = []
 				this._voiceRecorderType = 'h5'
 				this._mediaStream = stream
@@ -2546,14 +2687,23 @@
 						if (event.data && event.data.size) chunks.push(event.data)
 					}
 					recorder.onerror = event => resolve({
-						error: new Error(event && event.error && event.error.message ? event.error.message : '浏览器录音失败')
+						error: new Error(event && event.error && event.error.message ? event.error
+							.message : '浏览器录音失败')
 					})
 					recorder.onstop = () => {
 						const finalType = recorder.mimeType || mimeType || 'audio/webm'
 						const extension = finalType.includes('mp4') ? 'm4a' : 'webm'
-						const blob = new Blob(chunks, { type: finalType })
-						const file = new File([blob], `voice_${Date.now()}.${extension}`, { type: finalType })
-						resolve({ file, mimeType: finalType, name: file.name })
+						const blob = new Blob(chunks, {
+							type: finalType
+						})
+						const file = new File([blob], `voice_${Date.now()}.${extension}`, {
+							type: finalType
+						})
+						resolve({
+							file,
+							mimeType: finalType,
+							name: file.name
+						})
 					}
 				})
 				recorder.start(200)
@@ -2596,7 +2746,8 @@
 
 				try {
 					const result = stoppedResult || await this.stopVoiceCapture()
-					const measuredDuration = this._voiceRecordingStartedAt ? Date.now() - this._voiceRecordingStartedAt : 0
+					const measuredDuration = this._voiceRecordingStartedAt ? Date.now() - this
+						._voiceRecordingStartedAt : 0
 					const duration = Math.min(
 						MAX_VOICE_DURATION,
 						Math.max(0, Number(result && result.duration) || this.recordingElapsed || measuredDuration)
@@ -2605,7 +2756,10 @@
 
 					if (intent === 'cancel') return
 					if (duration < MIN_VOICE_DURATION) {
-						uni.showToast({ title: '说话时间太短', icon: 'none' })
+						uni.showToast({
+							title: '说话时间太短',
+							icon: 'none'
+						})
 						return
 					}
 
@@ -2619,7 +2773,8 @@
 				} catch (error) {
 					this.resetRecordingState()
 					uni.showToast({
-						title: error && error.message ? error.message : reachedLimit ? '录音已到60秒，发送失败' : '录音处理失败',
+						title: error && error.message ? error.message : reachedLimit ? '录音已到60秒，发送失败' :
+							'录音处理失败',
 						icon: 'none'
 					})
 					console.error('[Chat] 结束录音失败', error)
@@ -2711,7 +2866,10 @@
 					if (!await this.checkChatLimitsBeforeSend()) return false
 					const isOtherBlocked = await this.checkOtherBlockedBeforeSend()
 					if (!isOtherBlocked) {
-						uni.showLoading({ title: '语音发送中...', mask: true })
+						uni.showLoading({
+							title: '语音发送中...',
+							mask: true
+						})
 						loadingVisible = true
 					}
 					const nim = getNimInstance()
@@ -2747,7 +2905,10 @@
 			async sendTranscribedText() {
 				const content = this.transcribedText.trim()
 				if (!content) {
-					uni.showToast({ title: '请输入消息', icon: 'none' })
+					uni.showToast({
+						title: '请输入消息',
+						icon: 'none'
+					})
 					return
 				}
 				const sent = await this.sendTextContent(content)
@@ -2792,7 +2953,8 @@
 				this.clearVoiceTimer()
 				try {
 					if (this._voiceRecorderType === 'native' && this._recorderManager) this._recorderManager.stop()
-					if (this._voiceRecorderType === 'h5' && this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
+					if (this._voiceRecorderType === 'h5' && this._mediaRecorder && this._mediaRecorder.state !==
+						'inactive') {
 						this._mediaRecorder.stop()
 					}
 				} catch (error) {
@@ -2831,7 +2993,9 @@
 				const extension = String(message && (message.ext || message.name) || '')
 					.toLowerCase()
 					.match(/(?:^|\.)(mp3|mpeg|m4a|mp4|aac|wav|amr|ogg|webm)(?:$|[?#])/)
-				return getAudioMimeType({ name: extension && extension[0] })
+				return getAudioMimeType({
+					name: extension && extension[0]
+				})
 			},
 			isIOSBrowser() {
 				if (typeof navigator === 'undefined') return false
@@ -2849,14 +3013,19 @@
 					typeof window === 'undefined' || !window.URL || typeof window.URL.createObjectURL !== 'function') {
 					return false
 				}
-				const response = await fetch(source, { mode: 'cors', credentials: 'omit' })
+				const response = await fetch(source, {
+					mode: 'cors',
+					credentials: 'omit'
+				})
 				if (!response.ok) throw new Error(`音频资源请求失败（${response.status}）`)
 				const blob = await response.blob()
 				if (!blob || !blob.size) throw new Error('音频资源为空')
 				// 响应头给出真实 audio MIME 时优先采用它；部分云信历史附件只返回 application/octet-stream。
 				const responseMimeType = /^audio\//i.test(blob.type || '') ? blob.type.toLowerCase() : ''
 				const mimeType = responseMimeType || this.getAudioPlaybackMimeType(message) || 'audio/mp4'
-				const playableBlob = blob.type === mimeType ? blob : new Blob([blob], { type: mimeType })
+				const playableBlob = blob.type === mimeType ? blob : new Blob([blob], {
+					type: mimeType
+				})
 				const objectUrl = window.URL.createObjectURL(playableBlob)
 				const player = this.createH5AudioElement(objectUrl, mimeType)
 				if (!player) {
@@ -3287,8 +3456,7 @@
 				if (!filePath && !sourceFile) throw new Error('未获取到图片文件')
 
 				const browserFile = typeof Blob === 'undefined' ?
-					null :
-					[sourceFile, sourceFile && sourceFile.file, sourceFile && sourceFile.raw]
+					null : [sourceFile, sourceFile && sourceFile.file, sourceFile && sourceFile.raw]
 					.find(item => item instanceof Blob) || null
 				const sourceType = browserFile && browserFile.type ?
 					String(browserFile.type).toLowerCase() :
@@ -3447,11 +3615,9 @@
 						})
 					})
 					const tempFiles = chooseResult && Array.isArray(chooseResult.tempFiles) ?
-						chooseResult.tempFiles.slice(0, isCamera ? 1 : 9) :
-						[]
+						chooseResult.tempFiles.slice(0, isCamera ? 1 : 9) : []
 					const tempFilePaths = chooseResult && Array.isArray(chooseResult.tempFilePaths) ?
-						chooseResult.tempFilePaths.slice(0, isCamera ? 1 : 9) :
-						[]
+						chooseResult.tempFilePaths.slice(0, isCamera ? 1 : 9) : []
 					const selectedCount = Math.max(tempFiles.length, tempFilePaths.length)
 					const selectedImages = Array.from({
 						length: selectedCount

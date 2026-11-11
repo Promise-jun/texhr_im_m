@@ -19,6 +19,7 @@ export const NIM_EVENT = Object.freeze({
 	TOTAL_UNREAD_COUNT_CHANGED: 'nim:total-unread-count-changed',
 	// SDK 收到一批新消息后统一转发给页面，避免每个页面重复直接绑定 SDK。
 	MESSAGE_RECEIVED: 'nim:message-received',
+	MESSAGE_REVOKED: 'nim:message-revoked',
 	P2P_READ_RECEIPTS: 'nim:p2p-read-receipts'
 })
 
@@ -123,6 +124,10 @@ function bindMessageListeners(nim) {
 		if (!receivedMessages.length) return
 		// 保留 SDK 原始消息对象，聊天页需要完整消息结构渲染文本、图片和语音。
 		emit(NIM_EVENT.MESSAGE_RECEIVED, receivedMessages)
+	})
+	messageService.on('onMessageRevokeNotifications', notifications => {
+		const revoked = Array.isArray(notifications) ? notifications.filter(item => item && item.messageRefer) : []
+		if (revoked.length) emit(NIM_EVENT.MESSAGE_REVOKED, revoked)
 	})
 	// 单聊回执是对方读到的时间边界，供会话列表即时更新。
 	messageService.on('onReceiveP2PMessageReadReceipts', receipts => {

@@ -138,6 +138,7 @@
 						:skip-greeting="Boolean(chatDetail.skipGreeting)"
 						:opening="Boolean(openingConversationId)" @read="handleConversationRead"
 						@access-consumed="handleInitialAccessConsumed"
+						@navigate-back="handleChatNavigateBack"
 						@changed="scheduleConversationReload" @pin-changed="handleConversationPinChanged" @action="handleChatAction" />
 					<!-- 历史页只读：详情接口成功后才挂载，组件再按企业→人才方向请求全部聊天记录。 -->
 					<pc-chat-history-panel v-else-if="historyChatDetail && activeMainTab === 'history'"
@@ -1185,7 +1186,6 @@
 					}
 					// 列表没有该人才时，先请求 Limits；请求受当前
 					// 会话序号保护，页面隐藏/切换后响应不会覆盖新的选择。
-					console.log(1111111111)
 					const response = await requestApi(useRouteAccess ? {
 						Name: 'Chat.MyChat.Limits',
 						Content: { JobId: this.routeJobId, ResumeId: this.routeResumeId }
@@ -1193,7 +1193,6 @@
 						Name: 'Chat.Chat.GetSingleChat',
 						Content: { PersonAccId: personAccId, EnterpriseAccId: enterpriseAccId }
 					})
-					console.log(123, response)
 					if (!isCurrent()) return
 					if (!response || typeof response !== 'object') throw new Error('获取会话信息失败')
 					if (useRouteAccess && (response.Code === undefined || Number(response.Code) !== 0)) {
@@ -1212,7 +1211,6 @@
 					if (data.Code !== undefined && Number(data.Code) !== 0) {
 						throw new Error('获取会话信息失败')
 					}
-					console.log(1122, useRouteAccess)
 					if (useRouteAccess) {
 						// SuccessStep 优先级最高；Tips 作为纯文本传给错误页。
 						const successStep = data.SuccessStep || response.SuccessStep
@@ -1302,7 +1300,6 @@
 					: enterprise.Id !== undefined ? enterprise.Id : enterprise.ID)
 				const jobId = String(enterpriseJobId === undefined || enterpriseJobId === null ? '' : enterpriseJobId).trim()
 					|| detail.jobId
-					console.log(2222222222222)
 				const limitsResponse = await requestApi({
 					Name: 'Chat.MyChat.Limits',
 					Content: { JobId: jobId, ResumeId: detail.resumeId }
@@ -1451,6 +1448,14 @@
 				} finally {
 					if (requestId === this._continueHistoryRequestId) this.isContinuingHistoryChat = false
 				}
+			},
+			handleChatNavigateBack(conversationId) {
+				const detail = this.chatDetail
+				if (!this._conversationPageAlive || !this.pageVisible || this.activeMainTab !== 'recent' ||
+					this.openingConversationId || !this.routePersonAccId || !conversationId || !detail ||
+					this.selectedId !== conversationId || detail.conversationId !== conversationId ||
+					String(detail.personAccId || '').trim() !== this.routePersonAccId) return
+				if (typeof window !== 'undefined' && typeof window.close === 'function') window.close()
 			},
 			handleConversationRead(conversationId) {
 				// 实际进入聊天区后才同步清除本地展示的未读数，接口失败不会提前消除红点。
