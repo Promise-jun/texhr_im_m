@@ -134,7 +134,7 @@ async function verify() {
   await greeting.panel.loadChatAccess()
   await new Promise(resolve => setTimeout(resolve, 0))
   const greetingCall = greeting.calls.find(item => item.Name === 'Chat.ChatButton.Get')
-  assert.deepEqual(greetingCall.Content, { ResumeId: 'resume' })
+  assert.deepEqual(greetingCall.Content, { JobId: 'job', ResumeId: 'resume' })
   assert.equal(greeting.sends.length, 2)
   assert.deepEqual(JSON.parse(greeting.sends[0].raw), { type: 4, data: limitsMessage })
   assert.equal(greeting.sends[1].raw, undefined)

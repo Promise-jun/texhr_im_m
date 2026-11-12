@@ -92,7 +92,6 @@
 
 	const CHAT_SAVE_API = 'Chat.Chat.Save'
 	const CHAT_DELETE_API = 'Chat.Chat.Delete'
-	const CHAT_GET_SINGLE_API = 'Chat.Chat.GetSingleChat'
 
 	function parseResponseData(data, errorMessage = '接口返回的数据格式不正确') {
 		if (typeof data !== 'string') return data || {}
@@ -759,52 +758,19 @@
 				}
 
 				this.openingConversationId = conversation.id
-				uni.showLoading({ title: '加载中', mask: true })
-				try {
-					const response = await requestApi({
-						Name: CHAT_GET_SINGLE_API,
-						Content: {
-							PersonAccId: personAccId,
-							EnterpriseAccId: enterpriseAccId
-						}
-					})
-					const responseCode = response && response.Code !== undefined ? Number(response.Code) : NaN
-					if (!response || responseCode !== 0) {
-						const code = response && response.Code !== undefined ? response.Code : 'unknown'
-						throw new Error(`获取会话信息失败，业务错误码：${code}`)
-					}
-
-					const data = parseResponseData(response.Data, '获取会话信息接口返回的数据格式不正确')
-					if (data.Code !== undefined && Number(data.Code) !== 0) {
-						throw new Error(`获取会话信息失败，数据错误码：${data.Code}`)
-					}
-					const jobValue = data.JobId !== undefined ? data.JobId : response.JobId
-					const resumeValue = data.ResumeId !== undefined ? data.ResumeId : response.ResumeId
-					const jobId = jobValue !== undefined && jobValue !== null ? String(jobValue).trim() : ''
-					const resumeId = resumeValue !== undefined && resumeValue !== null ? String(resumeValue).trim() : ''
-					if (!jobId || !resumeId) throw new Error('获取会话信息失败：未返回 JobId 或 ResumeId')
-
-					const url = `/pages/person/m/chat?jobId=${encodeURIComponent(jobId)}&resumeId=${encodeURIComponent(resumeId)}`
-					uni.navigateTo({
-						url,
-						success: () => {
-							this.clearNewMessageIndicator(conversation.id)
-						},
-						fail: error => {
-							console.error('[NIM] 打开聊天页面失败', error)
-							uni.showToast({ title: '打开聊天页面失败', icon: 'none' })
-						}
-					})
-				} catch (error) {
-					console.error('[NIM] 获取会话详情失败', error)
-					uni.showToast({
-						title: error && error.message ? error.message : '获取会话信息失败',
-						icon: 'none'
-					})
-				} finally {
-					uni.hideLoading()
-					this.openingConversationId = ''
-				}
+				// 会话详情由聊天页统一查询，列表只传递双方账号。
+				const url = `/pages/person/m/chat?personAccId=${encodeURIComponent(personAccId)}&enterpriseAccId=${encodeURIComponent(enterpriseAccId)}`
+				uni.navigateTo({
+					url: appendExternalReturnUrl(url, this.externalReturnUrl),
+					success: () => {
+						this.clearNewMessageIndicator(conversation.id)
+					},
+					fail: error => {
+						console.error('[NIM] 打开聊天页面失败', error)
+						uni.showToast({ title: '打开聊天页面失败', icon: 'none' })
+					},
+					complete: () => { this.openingConversationId = '' }
+				})
 			},
 			clearNewMessageIndicator(conversationId) {
 				if (!conversationId) return

@@ -181,17 +181,15 @@ function getAuthFromCookie(isEnterprise) {
 	if (url.includes('ehr')) {
 		return {
 			EnterpriseId: 198185,
-			Token: 'KEtwybo0VRbgyRE5YzRn',
+			Token: 'Ilj1drTFmgG9ekCvYzeh',
 			// EnterpriseId: 19441,
-			// Token: 'a-1WwtwRIxVMQZdA795W',
+			// Token: 'xdrx24Yv91bgi_P4AVfC',
 		}
 	} else {
 		return {
 			PersonId: 210902,
-			Token: 'w73oZEqLlHVL1t7GA4Lx',
+			Token: 'LD2PrBZyEiEjE2ttP1XC',
 		}
-		// PersonId: 251883,
-		// Token: '7R5ymI3Zt9w9wVPoI0bo',
 	}
 
 	const idField = isEnterprise ? 'EnterpriseId' : 'PersonId'

@@ -118,7 +118,8 @@
 									</view>
 									<!-- 卡片底部直接展示 EnterpriseTime，不额外拼接提示内容。 -->
 									<view v-if="message.job.EnterpriseTime" class="job-message-tip">
-										{{ message.job.EnterpriseTime }}</view>
+										{{ message.job.EnterpriseTime }}
+									</view>
 								</view>
 								<image v-else-if="message.type === 'image'" :src="message.url" class="message-image"
 									mode="widthFix" @click.stop="previewImage(message.url)"></image>
@@ -166,7 +167,7 @@
 			</view>
 
 			<view v-if="activePanel" class="extension-panel"
-				:class="{ 'extension-panel--phrases': activePanel === 'phrases' }">
+				:class="{ 'extension-panel--phrases': activePanel === 'phrases', 'extension-panel--emoji': activePanel === 'emoji' }">
 				<view v-if="activePanel === 'phrases'" class="phrase-panel">
 					<scroll-view scroll-y class="phrase-list">
 						<view v-if="isLoadingCommonPhrases" class="phrase-status">常用语加载中...</view>
@@ -198,11 +199,14 @@
 					</view>
 				</view>
 
-				<view v-else-if="activePanel === 'emoji'" class="emoji-list">
-					<view v-for="emoji in emojis" :key="emoji.key" class="emoji-item" @click="appendEmoji(emoji)">
-						<image :src="emoji.url" :aria-label="emoji.key" class="emoji-image" mode="aspectFit"></image>
+				<scroll-view v-else-if="activePanel === 'emoji'" scroll-y class="emoji-scroll">
+					<view class="emoji-list">
+						<view v-for="emoji in emojis" :key="emoji.key" class="emoji-item" @click="appendEmoji(emoji)">
+							<image :src="emoji.url" :aria-label="emoji.key" class="emoji-image" mode="aspectFit">
+							</image>
+						</view>
 					</view>
-				</view>
+				</scroll-view>
 
 				<view v-else class="more-list">
 					<view v-for="item in moreActions" :key="item.key" class="more-item" @click="handleMoreAction(item)">
@@ -346,6 +350,7 @@
 	} from '../../../services/navigation'
 
 	const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
+	const CHAT_GET_SINGLE_API = 'Chat.Chat.GetSingleChat'
 	const CHAT_BUTTON_API = 'Chat.ChatButton.Get'
 	const CHAT_GET_JOB_STATE_API = 'Chat.Person.GetJobState'
 	const CHANGE_CHAT_JOB_API = 'Chat.Chat.ChangeJob'
@@ -616,7 +621,7 @@
 		if (declaredType) {
 			const normalized = declaredType.trim().toLowerCase()
 			if (normalized === 'audio/m4a' || normalized === 'audio/x-m4a' || normalized === 'audio/x-mp4')
-			return 'audio/mp4'
+				return 'audio/mp4'
 			if (normalized === 'audio/x-wav') return 'audio/wav'
 			return normalized
 		}
@@ -794,6 +799,7 @@
 				scrollWithAnimation: false,
 				isRefreshingHistory: false,
 				isCheckingLimits: false,
+				shouldCheckChatLimits: false,
 				chatLimitErrorMessage: '',
 				initialSuccessStep: null,
 				isSwitchingChatJob: false,
@@ -884,6 +890,12 @@
 			// uni-app 会把 URL 查询参数传给 onLoad；同时兼容大小写，避免外部链接差异。
 			this.jobId = String(options.jobId || options.JobId || '').trim()
 			this.resumeId = String(options.resumeId || options.ResumeId || '').trim()
+			// 按参数是否存在判断，兼容 limit=true、limit=false 和空值。
+			this.shouldCheckChatLimits = Object.prototype.hasOwnProperty.call(options, 'limit')
+			this._chatEntryAccounts = {
+				PersonAccId: String(options.personAccId || options.PersonAccId || '').trim(),
+				EnterpriseAccId: String(options.enterpriseAccId || options.EnterpriseAccId || '').trim()
+			}
 			this.externalReturnUrl = getExternalReturnUrl(options)
 			// 历史详情的继续聊聊已发送指定消息，此入口不再重复发送初始化招呼语。
 			this._skipInitialChatGreeting = String(options.skipGreeting || '') === '1'
@@ -919,8 +931,8 @@
 			// #endif
 			this.bindNimLoginEvents()
 			this.loadCommonPhrases()
-			this.loadSendResumeStatus()
 			await this.loadChatAccess()
+			this.loadSendResumeStatus()
 		},
 		onUnload() {
 			this._chatPageAlive = false
@@ -992,8 +1004,7 @@
 			},
 			async loadChatAccess() {
 				if (this.isCheckingLimits) return
-
-				if (!this.jobId) {
+				if (this.shouldCheckChatLimits && !this.jobId) {
 					this.historyLoadError = '缺少 jobId'
 					return
 				}
@@ -1008,14 +1019,15 @@
 						this.handleSuccessStep(successStep)
 						return
 					}
-					// 先校验当前职位与简历是否允许进入聊天，再决定是否读取云信消息。
-					const response = await requestApi({
+					// limit 入口使用职位、简历校验权限，其余入口通过双方账号查询已有会话。
+					const response = this.shouldCheckChatLimits ? await requestApi({
 						Name: CHAT_LIMITS_API,
 						Content: {
 							JobId: this.jobId,
 							ResumeId: this.resumeId
 						}
-					})
+					}) : await this.loadSingleChat()
+					if (!this._chatPageAlive) return
 					if (!response || Number(response.Code) !== 0) {
 						const code = response && response.Code !== undefined ? response.Code : 'unknown'
 						const errorMessage = response && typeof response.ErrorMessage === 'string' ?
@@ -1028,7 +1040,7 @@
 						throw new Error(errorMessage || `获取沟通状态失败，业务错误码：${code}`)
 					}
 
-					const data = parseResponseData(response.Data, '沟通限制接口返回的数据格式不正确')
+					const data = parseResponseData(response.Data, '会话接口返回的数据格式不正确')
 					if (data.Code !== undefined && Number(data.Code) !== 0) {
 						throw new Error(`获取沟通状态失败，数据错误码：${data.Code}`)
 					}
@@ -1037,9 +1049,10 @@
 					const isTop = data.IsTop !== undefined ? data.IsTop : response.IsTop
 					this.isPinned = isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true'
 					// 兼容会话账号信息位于 Data 或响应根节点的两种返回结构。
+					const entryAccounts = this._chatEntryAccounts || {}
 					const personAccId = data.PersonAccId !== undefined ?
 						data.PersonAccId :
-						response.PersonAccId
+						response.PersonAccId !== undefined ? response.PersonAccId : entryAccounts.PersonAccId
 					this.personAccId = personAccId === undefined || personAccId === null ?
 						'' :
 						String(personAccId).trim()
@@ -1078,7 +1091,8 @@
 
 					const enterpriseAccId = data.EnterpriseAccId !== undefined ?
 						data.EnterpriseAccId :
-						response.EnterpriseAccId
+						response.EnterpriseAccId !== undefined ? response.EnterpriseAccId : entryAccounts
+						.EnterpriseAccId
 					this.enterpriseAccId = enterpriseAccId === undefined || enterpriseAccId === null ?
 						'' :
 						String(enterpriseAccId).trim()
@@ -1089,8 +1103,8 @@
 					const hasLimitsMessage = typeof limitsMessage === 'string' ?
 						limitsMessage.trim().length > 0 :
 						limitsMessage !== undefined && limitsMessage !== null
-					if (!this._skipInitialChatGreeting && normalizedReturnedJobId === normalizedCurrentJobId &&
-						hasLimitsMessage) {
+					if (this.shouldCheckChatLimits && !this._skipInitialChatGreeting &&
+						normalizedReturnedJobId === normalizedCurrentJobId && hasLimitsMessage) {
 						try {
 							await this.loadChatGreeting(limitsMessage, normalizedCurrentJobId)
 						} catch (error) {
@@ -1112,6 +1126,38 @@
 					if (this._chatPageAlive) this.isCheckingLimits = false
 				}
 			},
+			async loadSingleChat() {
+				const accounts = this._chatEntryAccounts || {}
+				if (!accounts.PersonAccId || !accounts.EnterpriseAccId) {
+					throw new Error('缺少 personAccId 或 enterpriseAccId')
+				}
+				const response = await requestApi({
+					Name: CHAT_GET_SINGLE_API,
+					Content: {
+						PersonAccId: accounts.PersonAccId,
+						EnterpriseAccId: accounts.EnterpriseAccId
+					}
+				})
+				if (!response || Number(response.Code) !== 0) {
+					const code = response && response.Code !== undefined ? response.Code : 'unknown'
+					throw new Error(response && response.ErrorMessage || `获取会话信息失败，业务错误码：${code}`)
+				}
+				const data = parseResponseData(response.Data, '获取会话信息接口返回的数据格式不正确')
+				if (data.Code !== undefined && Number(data.Code) !== 0) {
+					throw new Error(`获取会话信息失败，数据错误码：${data.Code}`)
+				}
+				const jobId = data.JobId !== undefined ? data.JobId : response.JobId
+				const resumeId = data.ResumeId !== undefined ? data.ResumeId : response.ResumeId
+				if (jobId === undefined || jobId === null || !String(jobId).trim() ||
+					resumeId === undefined || resumeId === null || !String(resumeId).trim()) {
+					throw new Error('获取会话信息失败：未返回 JobId 或 ResumeId')
+				}
+				if (this._chatPageAlive) {
+					if (!this.jobId) this.jobId = String(jobId).trim()
+					if (!this.resumeId) this.resumeId = String(resumeId).trim()
+				}
+				return response
+			},
 			handleSuccessStep(successStep) {
 				this.historyExhausted = true
 				this._pendingChatGreeting = null
@@ -1131,6 +1177,7 @@
 				})
 			},
 			async checkChatLimitsBeforeSend() {
+				if (!this.shouldCheckChatLimits) return true
 				const jobId = this.jobId === undefined || this.jobId === null ? '' : String(this.jobId).trim()
 				const resumeId = this.resumeId === undefined || this.resumeId === null ? '' : String(this.resumeId)
 					.trim()
@@ -1293,7 +1340,7 @@
 					const messageService = nim.V2NIMMessageService
 					if (!messageService || typeof messageService.sendMessage !== 'function' ||
 						!nim.V2NIMMessageCreator || typeof nim.V2NIMMessageCreator.createCustomMessage !== 'function'
-						) {
+					) {
 						throw new Error('当前聊天服务不支持发送自定义消息')
 					}
 
@@ -1495,7 +1542,7 @@
 					return
 				}
 				this.openMobileSiteUrl(
-					`https://m.texhr.cn/zp${encodeURIComponent(codeNum)}/${encodeURIComponent(jobId)}/`
+					`https://m.texhr.cn/zp${encodeURIComponent(codeNum)}/${encodeURIComponent(jobId)}/`, true
 				)
 			},
 			handleJobLogoError(message) {
@@ -1874,16 +1921,16 @@
 				const normalizedStepName = String(stepName || '').trim()
 				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '修改简历', '立即更新']
 				if (resumeStepNames.includes(normalizedStepName)) {
-					this.openMobileSiteUrl('https://m.texhr.cn/person/standardresume/myresume/')
+					this.openMobileSiteUrl('https://m.texhr.cn/person/standardresume/myresume/', false)
 					return
 				}
 				if (normalizedStepName === '立即解除' || normalizedStepName === '解除') {
 					this.openMobileSiteUrl(
-						'https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
+						'https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/', false)
 					return
 				}
 				if (normalizedStepName === '立即验证') {
-					this.openMobileSiteUrl('https://m.texhr.cn/person/basicinformation/phoneview')
+					this.openMobileSiteUrl('https://m.texhr.cn/person/basicinformation/phoneview', false)
 					return
 				}
 				if (normalizedStepName === '知道了') {
@@ -1922,14 +1969,17 @@
 					return
 				}
 
-				this.openMobileSiteUrl(`https://m.texhr.cn/zp${encodeURIComponent(codeNum)}/`)
+				this.openMobileSiteUrl(`https://m.texhr.cn/zp${encodeURIComponent(codeNum)}/`, true)
 			},
-			openMobileSiteUrl(url) {
+			openMobileSiteUrl(url, isBack) {
 				// return
 				// #ifdef H5
 				if (typeof window !== 'undefined' && window.location) {
-					// window.location.href = url
-					location.replace(url)
+					if (isBack) {
+						window.location.href = url
+					} else {
+						location.replace(url)
+					}
 					return
 				}
 				// #endif
@@ -2016,7 +2066,7 @@
 
 				const query =
 					`FromAccid=${encodeURIComponent(fromAccid)}&ToAccid=${encodeURIComponent(toAccid)}&reportType=person`
-				this.openMobileSiteUrl(`https://m.texhr.cn/report/ChatReportView?${query}`)
+				this.openMobileSiteUrl(`https://m.texhr.cn/report/ChatReportView?${query}`, true)
 			},
 			async handleMessagePermissionAction() {
 				if (this.isUpdatingBlockStatus || !this.enterpriseAccId) return
@@ -4702,9 +4752,13 @@
 		border-top: 1rpx solid #f0f0f0;
 		background: #f7f8fa;
 
-		&.extension-panel--phrases {
+		&.extension-panel--phrases,
+		&.extension-panel--emoji {
 			overflow: hidden;
 			padding: 0;
+		}
+
+		&.extension-panel--phrases {
 			background: #ffffff;
 		}
 	}
@@ -5031,10 +5085,16 @@
 		}
 	}
 
+	.emoji-scroll {
+		height: 100%;
+	}
+
 	.emoji-list {
 		display: grid;
+		box-sizing: border-box;
 		grid-template-columns: repeat(6, 1fr);
 		gap: 18rpx 12rpx;
+		padding: 20rpx 28rpx 28rpx;
 
 		.emoji-item {
 			display: flex;

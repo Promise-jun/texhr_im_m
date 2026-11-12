@@ -32,9 +32,10 @@
 							'message-bubble--audio': message.type === 'audio',
 							'message-bubble--job-card': message.type === 'job-card'
 						}" :style="message.type === 'audio' ? { width: audioBubbleWidth(message) } : null">
-							<!-- 历史职位卡片沿用 chat.vue 的字段及失效样式，只展示已发生的聊天记录。 -->
+							<!-- 历史职位卡片沿用 chat.vue 的字段及失效样式。 -->
 							<view v-if="message.type === 'job-card'" class="job-message-card"
-								:style="{ filter: message.job.status ? 'grayscale(0)' : 'grayscale(1)' }">
+								:style="{ filter: message.job.status ? 'grayscale(0)' : 'grayscale(1)' }"
+								@click.stop="handleJobCardClick(message)">
 								<view class="job-message-heading">
 									<text class="job-message-name">{{ message.job.JobName || '职位信息' }}</text>
 									<text class="job-message-salary">{{ message.job.status ? message.job.Salary : '已失效' }}</text>
@@ -468,12 +469,12 @@
 			},
 			openContinuedChat(pending, successStep) {
 				return new Promise((resolve, reject) => {
-					// 历史详情已完成权限校验，聊天页跳过默认招呼语；必要时接收原始 SuccessStep。
+					// 聊天页按双方账号查询最新会话，账号入口不会重复发送默认招呼语。
 					const successStepQuery = successStep
 						? `&successStep=${encodeURIComponent(JSON.stringify(successStep))}` : ''
-					uni.navigateTo({
+					uni.redirectTo({
 						url: appendExternalReturnUrl(
-							`/pages/person/m/chat?jobId=${encodeURIComponent(pending.jobId)}&resumeId=${encodeURIComponent(pending.resumeId)}&skipGreeting=1${successStepQuery}`,
+							`/pages/person/m/chat?personAccId=${encodeURIComponent(pending.personAccId)}&enterpriseAccId=${encodeURIComponent(pending.enterpriseAccId)}${successStepQuery}`,
 							this.externalReturnUrl
 						),
 						success: () => {
@@ -486,6 +487,30 @@
 			},
 			navigateBack() {
 				window.history.back()
+			},
+			handleJobCardClick(message) {
+				if (!message || message.type !== 'job-card' || !message.job || !message.job.status) return
+				const codeNum = String(this.chatDetail && this.chatDetail.CodeNum || '').trim()
+				const jobId = message.job.JobId === undefined || message.job.JobId === null ?
+					'' : String(message.job.JobId).trim()
+				if (!codeNum || !jobId) {
+					uni.showToast({ title: !codeNum ? '未获取到公司编号' : '未获取到职位编号', icon: 'none' })
+					return
+				}
+				const url = `https://m.texhr.cn/zp${encodeURIComponent(codeNum)}/${encodeURIComponent(jobId)}/`
+				// #ifdef H5
+				if (typeof window !== 'undefined' && window.location) {
+					window.location.href = url
+					return
+				}
+				// #endif
+				// #ifdef APP-PLUS
+				if (typeof plus !== 'undefined' && plus.runtime && typeof plus.runtime.openURL === 'function') {
+					plus.runtime.openURL(url)
+					return
+				}
+				// #endif
+				uni.showToast({ title: '当前环境无法打开页面', icon: 'none' })
 			},
 			handleAvatarError(message) {
 				if (!this.failedAvatarIds.includes(message.id)) this.failedAvatarIds.push(message.id)

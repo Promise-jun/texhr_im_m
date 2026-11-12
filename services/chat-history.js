@@ -53,6 +53,7 @@ export async function getHistoryChatDetail(personAccId, enterpriseAccId) {
 	if (!jobId || !resumeId) throw new Error('获取会话信息失败：未返回 JobId 或 ResumeId')
 	return {
 		...data,
+		...(data.CodeNum === undefined && response.CodeNum !== undefined ? { CodeNum: response.CodeNum } : {}),
 		JobId: jobId,
 		ResumeId: resumeId,
 		PersonAccId: accountId(data.PersonAccId) || person,

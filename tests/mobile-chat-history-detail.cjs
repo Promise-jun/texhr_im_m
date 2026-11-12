@@ -336,9 +336,12 @@ async function verifyEntryAndMedia() {
   assert.equal(env.toasts[1].title, '聊天服务尚未就绪')
   env.state.loggedIn = true
   await list.openConversation({ id: 'recent', targetId: 'company' })
-  assert.equal(env.calls.length, 1)
-  assert.equal(env.calls[0].Name, 'Chat.Chat.GetSingleChat')
-  assert.equal(env.navigation[1].url, '/pages/person/m/chat?jobId=job%20%261&resumeId=resume%2F2')
+  assert.equal(env.calls.length, 0, '列表跳转不请求 GetSingleChat')
+  assert.equal(env.navigation[1].url, '/pages/person/m/chat?personAccId=person-1&enterpriseAccId=company')
+  await list.openConversation({ id: 'recent', targetId: 'company' })
+  assert.equal(env.navigation.length, 2, '跳转完成前不重复打开会话')
+  env.navigation[1].complete()
+  assert.equal(list.openingConversationId, '')
 
   await env.enter()
   env.page.messages = [{ id: 'image-1', type: 'image', url: 'image-1.png' }, { id: 'image-2', type: 'image', url: 'image-2.png' }]
@@ -553,8 +556,8 @@ async function verifyJobListService() {
 }
 
 const flush = () => new Promise(resolve => setImmediate(resolve))
-const continuedUrl = `/pages/person/m/chat?jobId=${encodeURIComponent(singleDetail.JobId)}&resumeId=${encodeURIComponent(singleDetail.ResumeId)}&skipGreeting=1`
-const selectedUrl = `/pages/person/m/chat?jobId=${encodeURIComponent(availableJob.JobId)}&resumeId=${encodeURIComponent(singleDetail.ResumeId)}&skipGreeting=1`
+const continuedUrl = '/pages/person/m/chat?personAccId=person-1&enterpriseAccId=enterprise-1'
+const selectedUrl = continuedUrl
 function jobPickerRequest(args, state = 2) {
   if (args.Name === 'Chat.MyChat.Limits') return Promise.resolve({ Code: 0, Data: {} })
   if (args.Name === 'Chat.Person.GetJobState') return Promise.resolve({ Code: 0, Data: { State: state } })
@@ -736,7 +739,8 @@ async function verifyJobPickerCancellationAndRetry() {
       await flush()
       assert.equal(retry.calls.filter(call => call.Name === 'Chat.Chat.ChangeJob').length, 2)
       assert.equal(retry.sent.length, 4)
-      assert.match(retry.navigation[2].url, /jobId=another-job/)
+      assert.equal(retry.calls.filter(call => call.Name === 'Chat.Chat.ChangeJob')[1].Content.JobId, 'another-job')
+      assert.equal(retry.navigation[2].url, continuedUrl)
       retry.navigation[2].success()
       await third
     } else {

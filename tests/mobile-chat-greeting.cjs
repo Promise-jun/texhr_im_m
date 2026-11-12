@@ -92,6 +92,7 @@ async function verify() {
       throw new Error(`unexpected API: ${args.Name}`)
     },
     window: { location: browserLocation, history: { back: () => { pageBackCount += 1 } } },
+    location: { replace: url => { browserLocation.href = url } },
     uni: {
       getSystemInfoSync: () => ({}),
       $on() {},
@@ -122,6 +123,7 @@ async function verify() {
   assert.equal(page.selfAvatar, '/static/woman_avatar.png')
   page.jobId = 'job-7'
   page.resumeId = 'resume-3'
+  page.shouldCheckChatLimits = true
   let conversationPrepareCount = 0
   page.prepareNimConversation = async () => {
     conversationPrepareCount += 1
@@ -276,13 +278,13 @@ async function verify() {
   page.loadCommonPhrases = () => {}
   page.loadSendResumeStatus = () => {}
   const apiCount = calls.length, sentCount = sent.length
-  await definition.onLoad.call(page, { jobId: 'job-7', resumeId: 'resume-3', skipGreeting: '1' })
+  await definition.onLoad.call(page, { jobId: 'job-7', resumeId: 'resume-3', limit: 'true', skipGreeting: '1' })
   assert.equal(page._skipInitialChatGreeting, true)
   assert.equal(calls.length, apiCount + 1)
   assert.equal(calls[calls.length - 1].Name, 'Chat.MyChat.Limits')
   assert.equal(sent.length, sentCount)
-  // 普通入口保持原有默认消息行为。
-  await definition.onLoad.call(page, { jobId: 'job-7', resumeId: 'resume-3' })
+  // limit 入口保持原有默认消息行为。
+  await definition.onLoad.call(page, { jobId: 'job-7', resumeId: 'resume-3', limit: 'true' })
   assert.equal(page._skipInitialChatGreeting, false)
   assert.equal(sent.length, sentCount + 2)
 
@@ -290,7 +292,7 @@ async function verify() {
   const limitsBeforeForwardedStep = calls.filter(call => call.Name === 'Chat.MyChat.Limits').length
   const modalsBeforeForwardedStep = modals.length
   await definition.onLoad.call(page, {
-    jobId: 'job-7', resumeId: 'resume-3', skipGreeting: '1',
+    jobId: 'job-7', resumeId: 'resume-3', limit: 'true', skipGreeting: '1',
     successStep: encodeURIComponent(JSON.stringify(forwardedStep))
   })
   assert.equal(calls.filter(call => call.Name === 'Chat.MyChat.Limits').length, limitsBeforeForwardedStep)
@@ -310,10 +312,12 @@ async function verify() {
   assert.equal(pageBackCount, 1)
   successStepModal.success({ confirm: true })
   assert.equal(browserLocation.href, 'https://m.texhr.cn/person/standardresume/myresume/')
-  for (const stepName of ['立即创建', '立即完善', '立即修改', '立即验证']) {
+  for (const stepName of ['立即创建', '立即完善', '立即修改']) {
     page.navigateByStep(stepName)
     assert.equal(browserLocation.href, 'https://m.texhr.cn/person/standardresume/myresume/')
   }
+  page.navigateByStep('立即验证')
+  assert.equal(browserLocation.href, 'https://m.texhr.cn/person/basicinformation/phoneview')
   page.navigateByStep('立即解除')
   assert.equal(browserLocation.href, 'https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/')
 

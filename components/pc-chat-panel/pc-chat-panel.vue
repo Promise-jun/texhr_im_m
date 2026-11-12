@@ -950,10 +950,11 @@
 				// 同一聊天实例保留两条消息的发送进度，重连或重试不能重复发送已经成功的消息。
 				if (this.isCurrentChatGreeting(this._chatGreeting)) return this.sendPendingChatGreeting()
 				try {
-					// 文档 2259：PC 企业端传入当前简历 ResumeId，读取 Chat.ChatButton.Get 的 Greetings。
+					// PC 企业端传入当前职位和简历，读取 Chat.ChatButton.Get 的 Greetings。
 					const response = await requestApi({
 						Name: CHAT_BUTTON_API,
 						Content: {
+							JobId: greeting.jobId,
 							ResumeId: greeting.resumeId
 						}
 					})

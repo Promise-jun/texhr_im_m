@@ -14,7 +14,7 @@ const message = (id, time) => ({
   messageType: 0, text: id, isSelf: false
 })
 
-function environment({ loggedIn = true, switchFails = false } = {}) {
+function environment({ loggedIn = true, switchFails = false, singleResponse } = {}) {
   const calls = [], modals = [], sent = [], historyRequests = [], profiles = [], reads = [], toasts = []
   const listeners = new Map()
   const state = { loggedIn }
@@ -54,6 +54,11 @@ function environment({ loggedIn = true, switchFails = false } = {}) {
     requestApi: async args => {
       calls.push(args)
       switch (args.Name) {
+        case 'Chat.Chat.GetSingleChat':
+          return singleResponse || { Code: 0, Data: {
+            JobId: 'old-job', ResumeId: 'resume', PersonAccId: 'person', EnterpriseAccId: 'enterprise',
+            CodeNum: '123', IsTop: true, Message: { JobName: '旧职位' }
+          } }
         case 'Chat.MyChat.Limits':
           return { Code: 0, Data: {
             JobId: 'old-job', PersonAccId: 'person', EnterpriseAccId: 'enterprise',
@@ -82,8 +87,8 @@ function environment({ loggedIn = true, switchFails = false } = {}) {
   for (const [name, method] of Object.entries(definition.methods)) page[name] = method.bind(page)
   return {
     page, calls, modals, sent, historyRequests, profiles, reads, listeners, state, toasts,
-    enter: async () => {
-      const loading = definition.onLoad.call(page, { jobId: 'new-job', resumeId: 'resume' })
+    enter: async (options = { jobId: 'new-job', resumeId: 'resume', limit: 'true' }) => {
+      const loading = definition.onLoad.call(page, options)
       definition.onShow.call(page)
       await loading
     }
@@ -152,6 +157,64 @@ async function verify() {
   await flush()
   assertChatReady(delayed)
   assert.equal(delayed.sent.length, 0)
+
+  // 列表只传双方账号，聊天页获取职位/简历后继续加载历史、资料和实时消息。
+  const accounts = { personAccId: ' person ', enterpriseAccId: ' enterprise ' }
+  const existing = environment()
+  await existing.enter(accounts)
+  assertChatReady(existing)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(existing.calls.filter(call =>
+    ['Chat.MyChat.Limits', 'Chat.Chat.GetSingleChat'].includes(call.Name)))), [{
+    Name: 'Chat.Chat.GetSingleChat', Content: { PersonAccId: 'person', EnterpriseAccId: 'enterprise' }
+  }])
+  assert.equal(existing.page.jobId, 'old-job')
+  assert.equal(existing.page.resumeId, 'resume')
+  assert.equal(existing.calls.find(call => call.Name === 'Chat.Person.CheckSendResume').Content.JobId, 'old-job')
+  assert.equal(existing.page.codeNum, '123')
+  assert.equal(existing.page.isPinned, true)
+  assert.equal(existing.modals.length, 0)
+  assert.equal(existing.sent.length, 0, '已有会话不重复发送默认招呼语')
+  const callCount = existing.calls.length
+  assert.equal(await existing.page.checkChatLimitsBeforeSend(), true)
+  assert.equal(existing.calls.length, callCount, '不带 limit 时发送前也不请求 Limits')
+  await existing.listeners.get('message')([message('existing-live', 3)])
+  assert.ok(existing.page.messages.some(item => item.messageClientId === 'existing-live'))
+
+  const existingDelayed = environment({ loggedIn: false })
+  await existingDelayed.enter(accounts)
+  assert.equal(existingDelayed.historyRequests.length, 0)
+  existingDelayed.state.loggedIn = true
+  existingDelayed.listeners.get('login')(1)
+  await flush()
+  assertChatReady(existingDelayed)
+  assert.equal(existingDelayed.calls.filter(call => call.Name === 'Chat.Chat.GetSingleChat').length, 1)
+
+  const rootFields = environment({ singleResponse: {
+    Code: '0', Data: JSON.stringify({ IsTop: 'true' }), JobId: 'old-job', ResumeId: 'resume'
+  } })
+  await rootFields.enter({ PersonAccId: 'person', EnterpriseAccId: 'enterprise' })
+  assertChatReady(rootFields)
+  assert.equal(rootFields.page.jobId, 'old-job')
+  assert.equal(rootFields.page.resumeId, 'resume')
+  assert.equal(rootFields.page.isPinned, true)
+
+  for (const singleResponse of [{ Code: 9 }, { Code: 0, Data: { Code: 2 } },
+    { Code: 0, Data: '{invalid' }, { Code: 0, Data: { JobId: 'old-job' } }]) {
+    const failed = environment({ singleResponse })
+    await failed.enter(accounts)
+    assert.ok(failed.page.historyLoadError)
+    assert.equal(failed.historyRequests.length, 0, '会话查询失败不继续初始化')
+    assert.equal(failed.page.isCheckingLimits, false)
+  }
+
+  for (const limit of ['true', 'false', '']) {
+    const limited = environment()
+    await limited.enter({ jobId: 'new-job', resumeId: 'resume', limit })
+    assertChatReady(limited)
+    assert.equal(limited.calls.filter(call => call.Name === 'Chat.MyChat.Limits').length, 1)
+    assert.equal(limited.calls.filter(call => call.Name === 'Chat.Chat.GetSingleChat').length, 0)
+  }
+  console.log('PASS: URL limit presence selects Limits; account entries query GetSingleChat and initialize without Limits or greetings')
   console.log('PASS: mobile chat history and live messages work while the job switch modal is pending, cancelled, confirmed, or fails')
   console.log('PASS: delayed NIM login initializes chat without waiting for the job switch modal')
 }
