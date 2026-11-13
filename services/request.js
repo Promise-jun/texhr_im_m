@@ -20,7 +20,7 @@ const REQUEST_TIMEOUT = 15000
 const SPECIAL_CODE_MESSAGES = Object.freeze({
 	'9000002': '登录失效',
 	'4100001': '账户不存在',
-	'9000004': '您的账户已在其他设备登录，如非本人操作，请联系400-672-6626'
+	'9000004': '您的账户已在其他设备登录，如非本人操作，请联系400-672-6607'
 })
 
 const requestConfig = {
@@ -47,20 +47,20 @@ function uniRequest(options) {
 	})
 }
 
-function showSpecialCodeMessage(responseData) {
+function redirectToLoginForSpecialCode(responseData) {
 	if (!responseData || responseData.Code === undefined || responseData.Code === null) return
 
-	const message = SPECIAL_CODE_MESSAGES[String(responseData.Code)]
-	if (!message || typeof uni === 'undefined' || typeof uni.showModal !== 'function') return
+	if (!SPECIAL_CODE_MESSAGES[String(responseData.Code)]) return
 
-	uni.showModal({
-		title: '提示',
-		content: message,
-		showCancel: false,
-		success: result => {
-			if (result && result.confirm) location.replace('http://www.texhr.cn/ehr/login.html')
-		}
-	})
+	// #ifdef H5
+	if (typeof window !== 'undefined' && window.location) {
+		const loginUrl = isEnterprisePage() ?
+			'http://www.texhr.cn/ehr/login.html' :
+			'http://www.texhr.cn/person/login.html'
+		const returnUrl = encodeURIComponent(window.location.href)
+		window.location.replace(`${loginUrl}?return_url=${returnUrl}`)
+	}
+	// #endif
 }
 
 function getRawCookie(name) {
@@ -181,15 +181,18 @@ function getAuthFromCookie(isEnterprise) {
 	if (url.includes('ehr')) {
 		return {
 			EnterpriseId: 198185,
-			Token: 'Ilj1drTFmgG9ekCvYzeh',
-			// EnterpriseId: 19441,
-			// Token: 'xdrx24Yv91bgi_P4AVfC',
+			Token: 'hg-q-iOwhcaex3jVIYy_',
 		}
 	} else {
 		return {
-			PersonId: 210902,
-			Token: 'LD2PrBZyEiEjE2ttP1XC',
+			PersonId: 251780,
+			Token: '_rD7X-ysNd3we0uwut2M',
 		}
+		// PersonId: 251796,
+		// Token: 'TDRlwYefEhhwHY0jQJxq',
+		
+		// PersonId: 210902,
+		// Token: 'TbSkxQU7Eqz5uSksRplt',
 	}
 
 	const idField = isEnterprise ? 'EnterpriseId' : 'PersonId'
@@ -284,7 +287,7 @@ export async function requestApi({
 		throw createRequestError(`接口请求失败（HTTP ${response.statusCode}）`, response)
 	}
 
-	showSpecialCodeMessage(response.data)
+	redirectToLoginForSpecialCode(response.data)
 
 	return response.data
 }

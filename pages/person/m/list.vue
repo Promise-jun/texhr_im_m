@@ -758,8 +758,10 @@
 				}
 
 				this.openingConversationId = conversation.id
-				// 会话详情由聊天页统一查询，列表只传递双方账号。
-				const url = `/pages/person/m/chat?personAccId=${encodeURIComponent(personAccId)}&enterpriseAccId=${encodeURIComponent(enterpriseAccId)}`
+				// 复用列表已加载的头像，会话详情仍由聊天页查询。
+				const avatar = String(conversation.avatar || '').trim()
+				const avatarOption = avatar ? `&otherAvatar=${encodeURIComponent(avatar)}` : ''
+				const url = `/pages/person/m/chat?personAccId=${encodeURIComponent(personAccId)}&enterpriseAccId=${encodeURIComponent(enterpriseAccId)}${avatarOption}`
 				uni.navigateTo({
 					url: appendExternalReturnUrl(url, this.externalReturnUrl),
 					success: () => {

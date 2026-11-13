@@ -78,7 +78,7 @@ async function verify() {
     },
     requestHandler: async args => {
       assert.equal(args.Name, 'Chat.Chat.GetSingleChat')
-      return { Code: 0, Data: { JobId: 'job-1', ResumeId: 'resume-1' } }
+      return { Code: 0, Data: { JobId: 'job-1', ResumeId: 'resume-1', JobName: 'GetSingleChat职位' } }
     }
   }
   const globals = makeGlobals(state)
@@ -93,6 +93,8 @@ async function verify() {
   await existing.openRouteConversationAfterLoad()
   assert.equal(existing.selectedId, 'p2p-person-1')
   assert.equal(existing.chatDetail.personAccId, 'person-1')
+  assert.equal(existing.chatDetail.jobName, 'GetSingleChat职位')
+  assert.equal(existing.chatDetail.skipInitialAccess, true)
   assert.deepStrictEqual(state.calls.map(call => call.Name), ['Chat.Chat.GetSingleChat'])
 
   // 已有会话优先使用完整的 URL 职位/简历，不受 messageExisted 取值影响。
@@ -128,7 +130,8 @@ async function verify() {
   state.listedConversations = []
   state.requestHandler = async args => {
     assert.equal(args.Name, 'Chat.MyChat.Limits')
-    return { Code: 0, Data: { JobId: 'server-job', ResumeId: 'server-resume', Message: '开始沟通' } }
+    return { Code: 0, Data: { JobId: 'server-job', ResumeId: 'server-resume',
+      JobName: '不应显示的顶层职位', Message: { JobName: 'Limits职位' } } }
   }
   const fresh = loadPage(makeGlobals(state))
   prepare(fresh, 'person-2', {
@@ -138,6 +141,8 @@ async function verify() {
   assert.equal(fresh.selectedId, 'p2p-person-2')
   assert.equal(fresh.chatDetail.jobId, 'job-from-url')
   assert.equal(fresh.chatDetail.resumeId, 'resume-from-url')
+  assert.equal(fresh.chatDetail.jobName, 'Limits职位')
+  assert.equal(fresh.chatDetail.skipInitialAccess, false)
   assert.deepStrictEqual(JSON.parse(JSON.stringify(state.calls)), [{
     type: 'request', Name: 'Chat.MyChat.Limits',
     Content: { JobId: 'job-from-url', ResumeId: 'resume-from-url' }
@@ -157,15 +162,17 @@ async function verify() {
   state.modals.length = 0
   state.toasts.length = 0
   const tips = '职位已关闭 & 请重新选择？100%'
+  const stepName = '立即升级 & 申请？'
   state.requestHandler = async args => {
     assert.equal(args.Name, 'Chat.MyChat.Limits')
-    return { Code: 0, Data: JSON.stringify({ SuccessStep: { Tips: tips }, Message: '忽略' }) }
+    return { Code: 0, Data: JSON.stringify({ SuccessStep: { Tips: tips, StepName: stepName }, Message: '忽略' }) }
   }
   const blocked = loadPage(makeGlobals(state))
   prepare(blocked, 'blocked', { messageExisted: true, jobId: 'job', resumeId: 'resume' })
   await blocked.openRouteConversationAfterLoad()
   assert.deepStrictEqual(state.calls.map(call => call.Name), ['Chat.MyChat.Limits'])
-  assert.equal(state.redirects[0].url, `/pages/ehr/pc/error?tips=${encodeURIComponent(tips)}`)
+  assert.equal(state.redirects[0].url, `/pages/ehr/pc/error?tips=${encodeURIComponent(tips)}`
+    + `&stepName=${encodeURIComponent(stepName)}`)
   assert.equal(blocked.chatDetail, null)
 
   // Message 为空时仅调用业务删除并弹窗，不操作云信会话。
@@ -212,19 +219,37 @@ async function verify() {
   assert.equal(failedExpired.chatDetail, null)
   assert.notEqual(failedExpired._routeConversationOpened, true)
 
-  // 权限接口失败、数据无效及账号不符时均不得删除会话。
+  // Limits 的 Code 非 0 且 ErrorMessage 有值时，编码文案并跳转统一错误页。
+  state.calls.length = 0
+  state.redirects.length = 0
+  state.toasts.length = 0
+  const limitsErrorMessage = '职位不可用 & 请重新选择？100%'
+  state.requestHandler = async () => ({ Code: '1', ErrorMessage: limitsErrorMessage })
+  const limitsError = loadPage(makeGlobals(state))
+  prepare(limitsError, 'person-limits-error', { jobId: 'job', resumeId: 'resume' })
+  await limitsError.openRouteConversationAfterLoad()
+  assert.deepStrictEqual(state.calls.map(call => call.Name), ['Chat.MyChat.Limits'])
+  assert.equal(state.redirects[0].url,
+    `/pages/ehr/pc/error?tips=${encodeURIComponent(limitsErrorMessage)}`)
+  assert.equal(state.toasts.length, 0)
+  assert.equal(limitsError.chatDetail, null)
+  assert.equal(limitsError._routeConversationOpened, true)
+
+  // 无 ErrorMessage、数据无效及账号不符时均不得删除会话或跳转。
   for (const response of [
-    { Code: 1, ErrorMessage: '请求失败' },
+    { Code: 1 },
     { Code: 0, Data: 'invalid json' },
     { Code: 0, Data: { Code: 2 } },
     { Code: 0, Data: { PersonAccId: 'other', Message: '' } }
   ]) {
     state.calls.length = 0
+		state.redirects.length = 0
     state.requestHandler = async () => response
     const invalid = loadPage(makeGlobals(state))
     prepare(invalid, 'person-invalid', { jobId: 'job', resumeId: 'resume' })
     await invalid.openRouteConversationAfterLoad()
     assert.deepStrictEqual(state.calls.map(call => call.Name), ['Chat.MyChat.Limits'])
+		assert.equal(state.redirects.length, 0)
     assert.equal(invalid.chatDetail, null)
   }
 

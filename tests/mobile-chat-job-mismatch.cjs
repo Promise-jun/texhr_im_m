@@ -14,7 +14,7 @@ const message = (id, time) => ({
   messageType: 0, text: id, isSelf: false
 })
 
-function environment({ loggedIn = true, switchFails = false, singleResponse } = {}) {
+function environment({ loggedIn = true, switchFails = false, singleResponse, limitsResponse } = {}) {
   const calls = [], modals = [], sent = [], historyRequests = [], profiles = [], reads = [], toasts = []
   const listeners = new Map()
   const state = { loggedIn }
@@ -22,12 +22,13 @@ function environment({ loggedIn = true, switchFails = false, singleResponse } = 
     V2NIMLoginService: { getLoginUser: () => 'person' },
     V2NIMConversationIdUtil: { p2pConversationId: account => `p2p-${account}` },
     V2NIMUserService: { getUserListFromCloud: async accounts => {
-      profiles.push(accounts[0])
+      profiles.push(...accounts)
       return accounts.map(accountId => ({ accountId, avatar: `${accountId}.png` }))
     } },
-    V2NIMMessageCreator: { createCustomMessage: (text, raw) => ({
-      text, messageType: 100, attachment: { raw }
-    }) },
+    V2NIMMessageCreator: {
+      createTextMessage: text => ({ text, messageType: 0 }),
+      createCustomMessage: (text, raw) => ({ text, messageType: 100, attachment: { raw } })
+    },
     V2NIMMessageService: {
       getMessageList: async options => {
         historyRequests.push(options)
@@ -60,7 +61,7 @@ function environment({ loggedIn = true, switchFails = false, singleResponse } = 
             CodeNum: '123', IsTop: true, Message: { JobName: '旧职位' }
           } }
         case 'Chat.MyChat.Limits':
-          return { Code: 0, Data: {
+          return limitsResponse || { Code: 0, Data: {
             JobId: 'old-job', PersonAccId: 'person', EnterpriseAccId: 'enterprise',
             Message: { JobName: '旧职位' }
           } }
@@ -174,9 +175,34 @@ async function verify() {
   assert.equal(existing.page.isPinned, true)
   assert.equal(existing.modals.length, 0)
   assert.equal(existing.sent.length, 0, '已有会话不重复发送默认招呼语')
-  const callCount = existing.calls.length
-  assert.equal(await existing.page.checkChatLimitsBeforeSend(), true)
-  assert.equal(existing.calls.length, callCount, '不带 limit 时发送前也不请求 Limits')
+  existing.page.checkOtherBlockedBeforeSend = async () => {}
+  existing.page.draft = '从聊天列表进入后发送'
+  await existing.page.sendMessage()
+  const sendLimitCalls = existing.calls.filter(call => call.Name === 'Chat.MyChat.Limits')
+  assert.equal(sendLimitCalls.length, 1, '不带 limit 的已有会话发送前仍须请求 Limits')
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(sendLimitCalls[0].Content)), {
+    JobId: 'old-job', ResumeId: 'resume'
+  })
+  assert.equal(existing.sent.length, 1)
+  assert.equal(existing.sent[0].value.text, '从聊天列表进入后发送')
+  assert.equal(existing.page.draft, '')
+
+  for (const limitsResponse of [
+    { Code: 0, Data: { SuccessStep: { Tips: '请完善简历后再联系企业', StepName: '立即完善' } } },
+    { Code: 1, ErrorMessage: '当前不能发送消息' }
+  ]) {
+    const blocked = environment({ limitsResponse })
+    await blocked.enter(accounts)
+    blocked.page.checkOtherBlockedBeforeSend = async () => {}
+    blocked.page.draft = '受限消息保留草稿'
+    await blocked.page.sendMessage()
+    assert.equal(blocked.calls.filter(call => call.Name === 'Chat.MyChat.Limits').length, 1)
+    assert.equal(blocked.sent.length, 0, '已有会话必须在 Limits 放行后才发送')
+    assert.equal(blocked.page.draft, '受限消息保留草稿')
+    assert.equal(blocked.page.isSendingMessage, false)
+    if (limitsResponse.ErrorMessage) assert.equal(blocked.toasts[0], limitsResponse.ErrorMessage)
+    else assert.equal(blocked.modals[0].content, limitsResponse.Data.SuccessStep.Tips)
+  }
   await existing.listeners.get('message')([message('existing-live', 3)])
   assert.ok(existing.page.messages.some(item => item.messageClientId === 'existing-live'))
 
@@ -214,7 +240,7 @@ async function verify() {
     assert.equal(limited.calls.filter(call => call.Name === 'Chat.MyChat.Limits').length, 1)
     assert.equal(limited.calls.filter(call => call.Name === 'Chat.Chat.GetSingleChat').length, 0)
   }
-  console.log('PASS: URL limit presence selects Limits; account entries query GetSingleChat and initialize without Limits or greetings')
+  console.log('PASS: URL limit controls initialization; existing chats still check Limits before sending and preserve blocked drafts')
   console.log('PASS: mobile chat history and live messages work while the job switch modal is pending, cancelled, confirmed, or fails')
   console.log('PASS: delayed NIM login initializes chat without waiting for the job switch modal')
 }

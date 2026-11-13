@@ -134,6 +134,7 @@
 						:conversation="activeConversation" :job-id="chatDetail.jobId" :resume-id="chatDetail.resumeId"
 						:person-acc-id="chatDetail.personAccId" :enterprise-acc-id="chatDetail.enterpriseAccId"
 						:initial-access="chatDetail.initialAccess"
+						:skip-initial-access="Boolean(chatDetail.skipInitialAccess)"
 						:detail="chatDetail" :drafts="conversationDrafts" :visible="pageVisible"
 						:skip-greeting="Boolean(chatDetail.skipGreeting)"
 						:opening="Boolean(openingConversationId)" @read="handleConversationRead"
@@ -218,6 +219,29 @@
 	const CHAT_SAVE_API = 'Chat.Chat.Save'
 	const CHAT_DELETE_API = 'Chat.Chat.Delete'
 	const EXPIRED_ROUTE_MESSAGE = '该会话已经过期，请重新在简历页面发起会话!'
+
+	function parseResponseObject(value) {
+		if (typeof value === 'string') {
+			try { value = JSON.parse(value) } catch (error) { return null }
+		}
+		return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+	}
+
+	function getConversationJobName(response, data, useRouteAccess) {
+		const message = parseResponseObject(data.Message !== undefined ? data.Message : response.Message)
+		if (useRouteAccess) {
+			// Limits 的职位信息位于 Message 中，不使用 GetSingleChat 的顶层取值规则。
+			if (message && message.JobName !== undefined && message.JobName !== null) {
+				return String(message.JobName).trim()
+			}
+		}
+		// 已有会话的职位名称来自 GetSingleChat；顶层字段同时兼容旧 Limits 返回。
+		const value = data.JobName !== undefined ? data.JobName : response.JobName
+		if (value !== undefined && value !== null && String(value).trim()) return String(value).trim()
+		// 兼容 GetSingleChat 的旧响应将职位信息放在 Message 中。
+		return !useRouteAccess && message && message.JobName !== undefined && message.JobName !== null ?
+			String(message.JobName).trim() : ''
+	}
 
 	export default {
 		components: { PcChatPanel, PcChatHistoryPanel },
@@ -969,6 +993,21 @@
 					}
 				})
 			},
+			redirectToRouteError(message, stepName = '') {
+				if (!this._conversationPageAlive || !this.pageVisible) return false
+				this._routeConversationOpened = true
+				const action = String(stepName || '').trim()
+				uni.redirectTo({
+					url: `/pages/ehr/pc/error?tips=${encodeURIComponent(String(message || ''))}`
+						+ (action ? `&stepName=${encodeURIComponent(action)}` : ''),
+					fail: () => {
+						if (!this._conversationPageAlive) return
+						this._routeConversationOpened = false
+						uni.showToast({ title: '打开提示页面失败，请重试', icon: 'none' })
+					}
+				})
+				return true
+			},
 			createRouteConversation(personAccId) {
 				if (!personAccId) return null
 				let conversationId = ''
@@ -1196,7 +1235,13 @@
 					if (!isCurrent()) return
 					if (!response || typeof response !== 'object') throw new Error('获取会话信息失败')
 					if (useRouteAccess && (response.Code === undefined || Number(response.Code) !== 0)) {
-						throw new Error(String(response.ErrorMessage || '').trim() || '获取沟通状态失败')
+						const errorMessage = String(response.ErrorMessage || '').trim()
+						// Limits 明确返回错误文案时，进入统一错误页展示，不再使用轻提示。
+						if (errorMessage) {
+							this.redirectToRouteError(errorMessage)
+							return
+						}
+						throw new Error('获取沟通状态失败')
 					}
 					// 必须先确认 Limits 成功并解析出有效数据，不能把请求失败误判为无消息并删除。
 					let data = {}
@@ -1215,16 +1260,7 @@
 						// SuccessStep 优先级最高；Tips 作为纯文本传给错误页。
 						const successStep = data.SuccessStep || response.SuccessStep
 						if (successStep) {
-							const tips = String(successStep.Tips || '')
-							this._routeConversationOpened = true
-							uni.redirectTo({
-								url: `/pages/ehr/pc/error?tips=${encodeURIComponent(tips)}`,
-								fail: () => {
-									if (!this._conversationPageAlive) return
-									this._routeConversationOpened = false
-									uni.showToast({ title: '打开提示页面失败，请重试', icon: 'none' })
-								}
-							})
+							this.redirectToRouteError(successStep.Tips, successStep.StepName)
 							return
 						}
 						if ((data.PersonAccId && String(data.PersonAccId).trim() !== personAccId)
@@ -1259,14 +1295,17 @@
 					}
 					// 与手机端一致解析业务置顶状态，只有接口未返回 IsTop 时才回退到云信缓存。
 					const isTop = data.IsTop !== undefined ? data.IsTop : response.IsTop
+					const jobName = getConversationJobName(response, data, useRouteAccess)
 					const detail = {
 						conversationId: conversation.id, conversation, jobId, resumeId, personAccId, enterpriseAccId,
-						jobName: data.JobName === undefined || data.JobName === null ? '' : String(data.JobName),
+						jobName,
 						jobLocation: data.Location === undefined || data.Location === null ? '' : String(data.Location),
 						jobSalary: data.Salary === undefined || data.Salary === null ? '' : String(data.Salary),
 						isPinned: isTop === undefined ? Boolean(conversation.stickTop)
 							: isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true',
 						chatByQRcode: data.ChatByQRcode || '',
+						// 已有会话和列表切换已通过 GetSingleChat 取得上下文，面板无需再次请求 Limits。
+						skipInitialAccess: !useRouteAccess,
 						// 仅外链“新发起且列表缺失”场景复用首次 Limits 响应，
 						// pc-chat-panel 会继续执行既有的权限、SuccessStep 和职位校验逻辑。
 						initialAccess: useRouteAccess ? response : null

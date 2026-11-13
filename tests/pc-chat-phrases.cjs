@@ -99,7 +99,8 @@ async function verify() {
     { Id: 'escaped', Msg: '第一行\\n第二行', IsTop: false }
   ]
   env.request(async args => args.Name === 'Chat.MyChat.Limits'
-    ? { Code: 0, Data: { JobName: '后端工程师' } } : { Code: 0, Data: { Rows: rows } })
+    ? { Code: 0, Data: { JobName: '不应显示的顶层职位', Message: { JobName: '后端工程师' } } }
+    : { Code: 0, Data: { Rows: rows } })
   await panel.loadChatAccess()
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(env.calls[0].Name, 'Chat.MyChat.Limits')

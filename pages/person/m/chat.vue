@@ -749,6 +749,7 @@
 				selfAvatar: DEFAULT_TALENT_AVATAR,
 				otherUserInfo: null,
 				otherAvatar: DEFAULT_AVATAR,
+				failedAvatarUrls: [],
 				actions: [{
 						key: 'resume',
 						label: '发简历',
@@ -896,6 +897,14 @@
 				PersonAccId: String(options.personAccId || options.PersonAccId || '').trim(),
 				EnterpriseAccId: String(options.enterpriseAccId || options.EnterpriseAccId || '').trim()
 			}
+			// 列表已显示过的头像可直接复用，避免进入详情后先退回默认图。
+			let entryAvatar = String(options.otherAvatar || '').trim()
+			if (entryAvatar && !/^(?:https?:)?\/|^data:/i.test(entryAvatar)) {
+				try { entryAvatar = decodeURIComponent(entryAvatar) } catch (error) {}
+			}
+			this._entryOtherAvatar = entryAvatar
+			this._entryOtherAvatarAccountId = this._chatEntryAccounts.EnterpriseAccId
+			if (this._entryOtherAvatarAccountId && entryAvatar) this.otherAvatar = entryAvatar
 			this.externalReturnUrl = getExternalReturnUrl(options)
 			// 历史详情的继续聊聊已发送指定消息，此入口不再重复发送初始化招呼语。
 			this._skipInitialChatGreeting = String(options.skipGreeting || '') === '1'
@@ -930,6 +939,8 @@
 			}
 			// #endif
 			this.bindNimLoginEvents()
+			// 已知双方账号时，资料预取与业务会话查询并行。
+			this.loadUserProfiles()
 			this.loadCommonPhrases()
 			await this.loadChatAccess()
 			this.loadSendResumeStatus()
@@ -986,7 +997,13 @@
 				uni.$off(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
 			},
 			handleNimLoginStatus(status) {
-				if (Number(status) !== 1 || !this.enterpriseAccId) return
+				if (!this._chatPageAlive) return
+				if (Number(status) !== 1) {
+					this._userProfilesRequest = null
+					return
+				}
+				this.loadUserProfiles()
+				if (!this.enterpriseAccId) return
 				Promise.resolve(this.prepareNimConversation())
 					.then(() => this.sendPendingChatGreeting())
 					.catch(error => {
@@ -1100,6 +1117,9 @@
 						throw new Error('获取沟通状态失败：未返回 EnterpriseAccId')
 					}
 
+					// 拿到对方账号后即加载头像，不等待招呼语接口。
+					this.loadUserProfiles()
+
 					const hasLimitsMessage = typeof limitsMessage === 'string' ?
 						limitsMessage.trim().length > 0 :
 						limitsMessage !== undefined && limitsMessage !== null
@@ -1177,7 +1197,7 @@
 				})
 			},
 			async checkChatLimitsBeforeSend() {
-				if (!this.shouldCheckChatLimits) return true
+				// limit 参数仅控制进入页面时的初始化，发送消息前始终校验沟通权限。
 				const jobId = this.jobId === undefined || this.jobId === null ? '' : String(this.jobId).trim()
 				const resumeId = this.resumeId === undefined || this.resumeId === null ? '' : String(this.resumeId)
 					.trim()
@@ -1428,8 +1448,7 @@
 					if (this._chatPageVisible && (typeof document === 'undefined' || !document.hidden))
 						setActiveConversationId(this.conversationId)
 					// 双方用户资料与历史消息并行获取，头像返回后 Vue 会自动刷新消息头像。
-					this.loadSelfUserProfile()
-					this.loadOtherUserProfile()
+					this.loadUserProfiles()
 					this.bindMessageEvents()
 					await this.loadEarlierMessages(true)
 					// 清除未读失败不影响历史消息展示，只记录日志供后续排查。
@@ -1444,83 +1463,74 @@
 
 				return this._conversationInitPromise
 			},
-			async loadSelfUserProfile() {
-				if (this._selfUserProfilePromise) return this._selfUserProfilePromise
+			loadUserProfiles() {
+				const entryAccounts = this._chatEntryAccounts || {}
+				const otherAccountId = this.enterpriseAccId || entryAccounts.EnterpriseAccId
+				if (!this._chatPageAlive || !otherAccountId) return
+				if (this._profileTargetAccountId !== otherAccountId) {
+					this._profileTargetAccountId = otherAccountId
+					this.otherUserInfo = null
+					const entryAvatar = this._entryOtherAvatarAccountId === otherAccountId ? this._entryOtherAvatar : ''
+					this.otherAvatar = entryAvatar && !this.failedAvatarUrls.includes(entryAvatar) ? entryAvatar : DEFAULT_AVATAR
+				}
 				if (!isNimLoggedIn()) return
 
 				const nim = getNimInstance()
 				const loginService = nim.V2NIMLoginService
-				const accountId = loginService && typeof loginService.getLoginUser === 'function' ?
-					loginService.getLoginUser() :
-					''
+				const selfAccountId = loginService && typeof loginService.getLoginUser === 'function' ?
+					loginService.getLoginUser() : ''
 				const userService = nim.V2NIMUserService
-				if (!accountId || !userService || typeof userService.getUserListFromCloud !== 'function') {
-					console.warn('[Chat] 无法获取云信个人资料：用户服务或登录账号不可用')
-					return
-				}
+				if (!selfAccountId || !userService) return
+				const requestKey = JSON.stringify([selfAccountId, otherAccountId])
+				const previous = this._userProfilesRequest
+				// 预取、登录事件与会话初始化会进入同一方法，页面内复用结果及在途请求。
+				if (previous && previous.nim === nim && previous.key === requestKey) return previous.promise
 
-				// 从网易云端获取最新的本人资料，不只读取 SDK 本地缓存。
-				this._selfUserProfilePromise = userService.getUserListFromCloud([accountId])
-					.then(userList => {
-						if (!this._chatPageAlive) return
-						const selfUser = (Array.isArray(userList) ? userList : [])
-							.find(user => user && user.accountId === accountId)
-						if (!selfUser) return
-
-						this.selfUserInfo = selfUser
-						const avatar = typeof selfUser.avatar === 'string' ? selfUser.avatar.trim() : ''
-						// 未设置云信头像时，根据用户性别展示对应的本地默认头像。
-						this.selfAvatar = avatar || getGenderAvatar(selfUser.gender)
-					})
-					.catch(error => {
-						// 个人资料失败不阻塞聊天消息，头像继续使用本地默认图。
-						console.warn('[Chat] 获取云信个人资料失败', error)
-					})
-					.finally(() => {
-						this._selfUserProfilePromise = null
-					})
-
-				return this._selfUserProfilePromise
-			},
-			async loadOtherUserProfile() {
-				if (this._otherUserProfilePromise) return this._otherUserProfilePromise
-				if (!isNimLoggedIn() || !this.enterpriseAccId) return
-
-				const userService = getNimInstance().V2NIMUserService
-				if (!userService || typeof userService.getUserListFromCloud !== 'function') {
-					this.otherUserInfo = null
-					this.otherAvatar = DEFAULT_AVATAR
-					console.warn('[Chat] 无法获取对方云信资料：用户服务不可用')
-					return
-				}
-
-				// EnterpriseAccId 即聊天对方的云信账号，从云端获取最新用户资料。
-				this._otherUserProfilePromise = userService.getUserListFromCloud([this.enterpriseAccId])
-					.then(userList => {
-						if (!this._chatPageAlive) return
-						const otherUser = (Array.isArray(userList) ? userList : [])
-							.find(user => user && user.accountId === this.enterpriseAccId)
-						this.otherUserInfo = otherUser || null
-						const avatar = otherUser && typeof otherUser.avatar === 'string' ?
-							otherUser.avatar.trim() :
-							''
-						this.otherAvatar = avatar || DEFAULT_AVATAR
-					})
-					.catch(error => {
-						// 获取失败不阻塞聊天消息，对方头像统一回退本地默认图。
-						if (this._chatPageAlive) {
-							this.otherUserInfo = null
-							this.otherAvatar = DEFAULT_AVATAR
+				const request = { nim, key: requestKey, promise: null }
+				const accountIds = Array.from(new Set([selfAccountId, otherAccountId]))
+				const isCurrent = () => this._chatPageAlive && this._userProfilesRequest === request &&
+					isNimLoggedIn() && getNimInstance() === nim &&
+					loginService.getLoginUser() === selfAccountId && this._profileTargetAccountId === otherAccountId
+				const applyUsers = (users, fromCloud = false) => {
+					if (!isCurrent()) return
+					;(Array.isArray(users) ? users : []).forEach(user => {
+						if (!user) return
+						const avatar = typeof user.avatar === 'string' ? user.avatar.trim() : ''
+						const usableAvatar = this.failedAvatarUrls.includes(avatar) ? '' : avatar
+						if (user.accountId === selfAccountId) {
+							this.selfUserInfo = user
+							this.selfAvatar = usableAvatar || getGenderAvatar(user.gender)
+						} else if (user.accountId === otherAccountId) {
+							this.otherUserInfo = user
+							// 缓存未提供头像时保留列表图片；云端明确清空头像时恢复默认图。
+							this.otherAvatar = usableAvatar || (fromCloud ? DEFAULT_AVATAR : this.otherAvatar)
 						}
-						console.warn('[Chat] 获取对方云信资料失败', error)
 					})
-					.finally(() => {
-						this._otherUserProfilePromise = null
-					})
-
-				return this._otherUserProfilePromise
+				}
+				this._userProfilesRequest = request
+				request.promise = (async () => {
+					// getUserList 优先读取 SDK 缓存，缓存缺失时由 SDK 补取。
+					if (typeof userService.getUserList === 'function') {
+						try {
+							applyUsers(await userService.getUserList(accountIds))
+						} catch (error) {
+							console.warn('[Chat] 读取云信用户资料缓存失败', error)
+						}
+					}
+					if (!isCurrent()) return
+					// 双方资料合并为一次后台刷新，失败时保留已显示的缓存头像。
+					if (typeof userService.getUserListFromCloud === 'function') {
+						applyUsers(await userService.getUserListFromCloud(accountIds), true)
+					}
+				})().catch(error => {
+					if (this._userProfilesRequest === request) this._userProfilesRequest = null
+					console.warn('[Chat] 刷新云信用户资料失败', error)
+				})
+				return request.promise
 			},
 			handleAvatarError(direction) {
+				const avatar = direction === 'self' ? this.selfAvatar : this.otherAvatar
+				if (avatar && !this.failedAvatarUrls.includes(avatar)) this.failedAvatarUrls.push(avatar)
 				if (direction === 'self') {
 					const gender = this.selfUserInfo ? this.selfUserInfo.gender : 0
 					this.selfAvatar = getGenderAvatar(gender)
@@ -1919,7 +1929,7 @@
 			},
 			navigateByStep(stepName) {
 				const normalizedStepName = String(stepName || '').trim()
-				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '修改简历', '立即更新']
+				const resumeStepNames = ['立即创建', '立即完善', '立即修改', '修改简历']
 				if (resumeStepNames.includes(normalizedStepName)) {
 					this.openMobileSiteUrl('https://m.texhr.cn/person/standardresume/myresume/', false)
 					return
@@ -1929,7 +1939,7 @@
 						'https://m.texhr.cn/person/basicinformation/hidesetview/?url=/person/usercenter/', false)
 					return
 				}
-				if (normalizedStepName === '立即验证') {
+				if (normalizedStepName === '立即验证' || normalizedStepName === '立即更新') {
 					this.openMobileSiteUrl('https://m.texhr.cn/person/basicinformation/phoneview', false)
 					return
 				}

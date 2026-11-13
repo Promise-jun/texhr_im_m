@@ -481,6 +481,11 @@
 				type: Object,
 				default: null
 			},
+			// 已有会话由父页 GetSingleChat 提供上下文，首次挂载不再重复请求 Limits。
+			skipInitialAccess: {
+				type: Boolean,
+				default: false
+			},
 			visible: {
 				type: Boolean,
 				default: true
@@ -682,7 +687,8 @@
 			uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
 			uni.$on(NIM_EVENT.MESSAGE_REVOKED, this.handleMessageRevoked)
 			uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
-			this.loadChatAccess()
+			if (this.skipInitialAccess) this.initializeExistingConversation()
+			else this.loadChatAccess()
 		},
 		beforeDestroy() {
 			this._alive = false
@@ -698,6 +704,15 @@
 			this.releaseCurrentConversation()
 		},
 		methods: {
+			initializeExistingConversation() {
+				if (!this._alive) return
+				this.accessReady = true
+				this.accessError = ''
+				this.limitsErrorMessage = ''
+				// 已有会话直接加载面板依赖，不触发进入会话时的 Chat.MyChat.Limits。
+				this.loadCommonPhrases()
+				this.prepareConversation()
+			},
 			bindInputEvents() {
 				// #ifdef H5
 				const input = this.$refs.composerInput
@@ -770,8 +785,10 @@
 					if (isTop !== undefined) {
 						this.isPinned = isTop === true || Number(isTop) === 1 || String(isTop).toLowerCase() === 'true'
 					}
-					// 当前沟通职位名称以权限接口返回值为准；兼容名称位于 Data 或响应根节点。
-					const jobName = data.JobName !== undefined ? data.JobName : response.JobName
+					// Limits 返回的当前职位位于 Message 中；顶层 JobName 仅作旧数据兼容。
+					const limitsMessage = parseObject(data.Message !== undefined ? data.Message : response.Message)
+					const jobName = limitsMessage && limitsMessage.JobName !== undefined ? limitsMessage.JobName
+						: data.JobName !== undefined ? data.JobName : response.JobName
 					if (jobName !== undefined && jobName !== null) this.jobName = String(jobName).trim()
 					// 与现有聊天页一致，兼容权限提示位于 Data 或响应根节点的返回结构。
 					const successStep = data.SuccessStep || response.SuccessStep
