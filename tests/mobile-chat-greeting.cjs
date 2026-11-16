@@ -130,6 +130,9 @@ async function verify() {
     page.conversationId = 'p2p-enterprise-2'
   }
   page.scrollToBottom = () => {}
+  page.checkOtherBlockedBeforeSend = async () => {
+    eventOrder.push('block-check')
+  }
 
   await page.loadChatAccess()
 
@@ -138,6 +141,10 @@ async function verify() {
   assert.equal(calls[1].Name, 'Chat.ChatButton.Get')
   assert.equal(calls[2].Name, 'Chat.MyChat.Limits')
   assert.equal(calls[3].Name, 'Chat.MyChat.Limits')
+  assert.deepEqual(eventOrder.slice(2, 8), [
+    'Chat.MyChat.Limits', 'block-check', 'send',
+    'Chat.MyChat.Limits', 'block-check', 'send'
+  ])
   assert.deepEqual(calls[1].Content, { JobId: 'job-7' })
   assert.equal(page.codeNum, '128943')
   page.handleAction({ key: 'company' })

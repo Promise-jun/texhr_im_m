@@ -3,9 +3,11 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const requestApiEnvironment = require('./request-api-helper.cjs')
 const maskPhoneNumbers = require('./mask-phone-helper.cjs')
 const root = path.resolve(__dirname, '..')
 const source = fs.readFileSync(path.join(root, 'components/pc-chat-panel/pc-chat-panel.vue'), 'utf8')
+assert.ok(source.includes("{{ jobName || detail.jobName || '无' }}"))
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/import[\s\S]*?from\s+['"][^'"]+['"]/g, '').replace('export default', 'module.exports =')
 
@@ -36,6 +38,7 @@ function environment(options = {}) {
   }
   const context = vm.createContext({ module: { exports: {} }, maskPhoneNumbers, console: { warn() {} },
     NIM_EMOJIS: [], getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
+    notifyNimNotReady: () => toasts.push('聊天服务尚未就绪'),
     uni: { showToast: value => toasts.push(value.title), showModal: value => modals.push(value),
       navigateBack: () => { state.uniBack++ } },
     ...(options.browser === false ? {} : { window: {
@@ -43,6 +46,7 @@ function environment(options = {}) {
       open: (url, target) => { opened.push({ url, target }); return options.popupBlocked ? null : {} }
     } }),
     requestApi: args => { calls.push(args); return request(args) } })
+  Object.assign(context, requestApiEnvironment(context.requestApi, { enterprise: true }))
   vm.runInContext(script, context)
   const def = context.module.exports
   const panel = { conversation: { name: '模拟人才', stickTop: false }, detail: { conversationId: 'a' },

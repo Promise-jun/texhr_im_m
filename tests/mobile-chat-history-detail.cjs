@@ -3,6 +3,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const requestApiEnvironment = require('./request-api-helper.cjs')
 
 const root = path.resolve(__dirname, '..')
 const source = relative => fs.readFileSync(path.join(root, relative), 'utf8')
@@ -52,6 +53,7 @@ function environment() {
     NIM_EVENT: { LOGIN_STATUS: 'login-status', LOGIN_FAILED: 'login-failed' },
     getNimLoginError: () => state.loginError,
     isNimLoggedIn: () => state.loggedIn,
+    notifyNimNotReady: () => toasts.push({ title: '聊天服务尚未就绪' }),
     getExternalReturnUrl: options => String(options && options.returnUrl || '').trim(),
     appendExternalReturnUrl: (url, externalReturnUrl) => externalReturnUrl ?
       `${url}${url.includes('?') ? '&' : '?'}returnUrl=${encodeURIComponent(externalReturnUrl)}` : url,
@@ -106,6 +108,7 @@ function environment() {
       return send(message, conversationId)
     } }
   }
+  Object.assign(globals, requestApiEnvironment(globals.requestApi))
   const service = vm.createContext({ ...globals })
   vm.runInContext(source('services/nim-emoji.js').replace(/^export /gm, ''), service)
   vm.runInContext(source('services/talent-avatar.js').replace(/^export /gm, ''), service)
@@ -491,6 +494,9 @@ async function verifyContinueService() {
   env.request(async () => ({ Code: 0, Data: { Enterprise: card } }))
   assert.deepStrictEqual(plain(await env.service.changeHistoryChatJob(' person ', ' enterprise ', singleDetail.JobId)), card)
   assert.deepStrictEqual(env.calls[2], {
+    Name: 'Chat.MyChat.Limits', Content: { JobId: singleDetail.JobId }
+  })
+  assert.deepStrictEqual(env.calls[3], {
     Name: 'Chat.Chat.ChangeJob',
     Content: { PersonAccId: 'person', EnterpriseAccId: 'enterprise', JobId: singleDetail.JobId, IsMessage: true }
   })
@@ -594,11 +600,14 @@ async function verifyJobPickerFlow() {
     assert.equal(env.page.isChoosingJob, false)
     assert.equal(env.modals.length, 0)
     assert.deepStrictEqual(env.calls[4], {
+      Name: 'Chat.MyChat.Limits', Content: { JobId: availableJob.JobId }
+    })
+    assert.deepStrictEqual(env.calls[5], {
       Name: 'Chat.Chat.ChangeJob', Content: {
         PersonAccId: 'person-1', EnterpriseAccId: 'enterprise-1', JobId: availableJob.JobId, IsMessage: true
       }
     })
-    assert.deepStrictEqual(env.calls[5], {
+    assert.deepStrictEqual(env.calls[6], {
       Name: 'Chat.MyChat.Limits', Content: { JobId: availableJob.JobId, ResumeId: singleDetail.ResumeId }
     })
     assert.deepStrictEqual(JSON.parse(env.sent[0].message.body), {
@@ -615,7 +624,7 @@ async function verifyJobPickerFlow() {
     text.resolve({ message: env.sent[1].message })
     await flush()
     assert.deepStrictEqual(env.events.slice(2), [
-      'Chat.Person.GetJobState', 'Chat.Chat.GetJobList', 'Chat.Chat.ChangeJob',
+      'Chat.Person.GetJobState', 'Chat.Chat.GetJobList', 'Chat.MyChat.Limits', 'Chat.Chat.ChangeJob',
       'Chat.MyChat.Limits', 'custom', 'Chat.MyChat.Limits', 'text'
     ])
     assert.equal(env.navigation[0].url, selectedUrl)
@@ -799,12 +808,15 @@ async function verifyContinueFlow() {
   confirmSwitch(changed)
   await flush()
   assert.deepStrictEqual(changed.calls[4], {
+    Name: 'Chat.MyChat.Limits', Content: { JobId: singleDetail.JobId }
+  })
+  assert.deepStrictEqual(changed.calls[5], {
     Name: 'Chat.Chat.ChangeJob', Content: { PersonAccId: 'person-1', EnterpriseAccId: 'enterprise-1', JobId: singleDetail.JobId, IsMessage: true }
   })
   assert.deepStrictEqual(JSON.parse(changed.sent[0].message.body), {
     type: 5, data: { JobId: singleDetail.JobId, JobName: '页面职位' }
   })
-  assert.deepStrictEqual(changed.calls[5], {
+  assert.deepStrictEqual(changed.calls[6], {
     Name: 'Chat.MyChat.Limits', Content: { JobId: singleDetail.JobId, ResumeId: singleDetail.ResumeId }
   })
   assert.equal(changed.sent.length, 1)
@@ -812,7 +824,7 @@ async function verifyContinueFlow() {
   customReceipt.resolve({ message: changed.sent[0].message })
   await flush()
   assert.deepStrictEqual(changed.events.slice(2), [
-    'Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.Chat.ChangeJob', 'Chat.MyChat.Limits', 'custom',
+    'Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.MyChat.Limits', 'Chat.Chat.ChangeJob', 'Chat.MyChat.Limits', 'custom',
     'Chat.MyChat.Limits', 'text'
   ])
   assert.equal(changed.sent[1].message.text, '我正在求职，请问贵公司还招人吗？')

@@ -35,6 +35,7 @@ function environment(blocked = false) {
   const context = vm.createContext({ module: { exports: {} }, NIM_EMOJIS: [], maskPhoneNumbers,
     requestApi: args => { limitsCalls.push(args); order.push('limits'); return limits(args) },
     getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
+    notifyNimNotReady: () => { toasts.push({ title: '聊天服务尚未就绪' }); order.push('toast') },
     console: { warn: (...args) => warnings.push(args) },
     uni: { showToast: value => { toasts.push(value); order.push('toast') }, showModal: value => modals.push(value) } })
   vm.runInContext(script, context)

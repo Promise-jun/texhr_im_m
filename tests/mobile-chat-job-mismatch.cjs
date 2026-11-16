@@ -3,6 +3,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const requestApiEnvironment = require('./request-api-helper.cjs')
 
 const source = fs.readFileSync(path.join(__dirname, '../pages/person/m/chat.vue'), 'utf8')
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
@@ -14,12 +15,12 @@ const message = (id, time) => ({
   messageType: 0, text: id, isSelf: false
 })
 
-function environment({ loggedIn = true, switchFails = false, singleResponse, limitsResponse } = {}) {
+function environment({ loggedIn = true, accountId = 'person', switchFails = false, singleResponse, limitsResponse } = {}) {
   const calls = [], modals = [], sent = [], historyRequests = [], profiles = [], reads = [], toasts = []
   const listeners = new Map()
-  const state = { loggedIn }
+  const state = { loggedIn, accountId }
   const nim = {
-    V2NIMLoginService: { getLoginUser: () => 'person' },
+    V2NIMLoginService: { getLoginUser: () => state.accountId },
     V2NIMConversationIdUtil: { p2pConversationId: account => `p2p-${account}` },
     V2NIMUserService: { getUserListFromCloud: async accounts => {
       profiles.push(...accounts)
@@ -57,7 +58,8 @@ function environment({ loggedIn = true, switchFails = false, singleResponse, lim
       switch (args.Name) {
         case 'Chat.Chat.GetSingleChat':
           return singleResponse || { Code: 0, Data: {
-            JobId: 'old-job', ResumeId: 'resume', PersonAccId: 'person', EnterpriseAccId: 'enterprise',
+            JobId: 'old-job', ResumeId: 'resume', PersonAccId: args.Content.PersonAccId,
+            EnterpriseAccId: args.Content.EnterpriseAccId,
             CodeNum: '123', IsTop: true, Message: { JobName: '旧职位' }
           } }
         case 'Chat.MyChat.Limits':
@@ -82,6 +84,7 @@ function environment({ loggedIn = true, switchFails = false, singleResponse, lim
       showLoading() {}, hideLoading() {}, $emit() {}
     }
   })
+  Object.assign(context, requestApiEnvironment(context.requestApi))
   vm.runInContext(script, context)
   const definition = context.module.exports
   const page = { ...definition.data(), $nextTick: callback => Promise.resolve().then(callback) }
@@ -96,18 +99,18 @@ function environment({ loggedIn = true, switchFails = false, singleResponse, lim
   }
 }
 
-function assertChatReady(env) {
-  assert.equal(env.page.enterpriseAccId, 'enterprise')
-  assert.equal(env.page.conversationId, 'p2p-enterprise')
+function assertChatReady(env, enterpriseAccId = 'enterprise') {
+  assert.equal(env.page.enterpriseAccId, enterpriseAccId)
+  assert.equal(env.page.conversationId, `p2p-${enterpriseAccId}`)
   assert.equal(env.historyRequests.length, 1, 'history loads without a modal decision and is not reloaded by switching')
-  assert.equal(env.historyRequests[0].conversationId, 'p2p-enterprise')
+  assert.equal(env.historyRequests[0].conversationId, `p2p-${enterpriseAccId}`)
   assert.ok(env.page.messages.some(item => item.messageClientId === 'history'))
   assert.equal(env.page.historyLoadError, '')
   assert.equal(env.page.isCheckingLimits, false)
   assert.equal(env.page.isWaitingForNim, false)
   assert.equal(env.page.isLoadingHistory, false)
-  assert.deepStrictEqual(env.profiles.slice().sort(), ['enterprise', 'person'])
-  assert.ok(env.reads.includes('p2p-enterprise'))
+  assert.deepStrictEqual(env.profiles.slice().sort(), [enterpriseAccId, 'person'].sort())
+  assert.ok(env.reads.includes(`p2p-${enterpriseAccId}`))
   assert.ok(env.listeners.has('message'))
 }
 
@@ -186,6 +189,40 @@ async function verify() {
   assert.equal(existing.sent.length, 1)
   assert.equal(existing.sent[0].value.text, '从聊天列表进入后发送')
   assert.equal(existing.page.draft, '')
+
+  const enterpriseOnly = environment()
+  await enterpriseOnly.enter({
+    jobId: '95364', resumeId: '182869', enterpriseAccId: 'ehr83e8ebf7d43dbb9751a87af27b4ff'
+  })
+  const enterpriseAccId = 'ehr83e8ebf7d43dbb9751a87af27b4ff'
+  assertChatReady(enterpriseOnly, enterpriseAccId)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(enterpriseOnly.calls.find(call =>
+    call.Name === 'Chat.Chat.GetSingleChat').Content)), {
+    PersonAccId: 'person', EnterpriseAccId: enterpriseAccId
+  })
+  assert.equal(enterpriseOnly.page.jobId, '95364')
+  assert.equal(enterpriseOnly.page.resumeId, '182869')
+  assert.equal(enterpriseOnly.page.personAccId, 'person')
+
+  const waitForAccount = environment({ loggedIn: false, accountId: '' })
+  await waitForAccount.enter({
+    jobId: '95364', resumeId: '182869', enterpriseAccId: 'ehr83e8ebf7d43dbb9751a87af27b4ff'
+  })
+  assert.equal(waitForAccount.page.isWaitingForNim, true)
+  assert.equal(waitForAccount.calls.filter(call => call.Name === 'Chat.Chat.GetSingleChat').length, 0)
+  assert.equal(waitForAccount.historyRequests.length, 0)
+  waitForAccount.state.accountId = 'person'
+  waitForAccount.state.loggedIn = true
+  waitForAccount.listeners.get('login')(1)
+  await flush()
+  await flush()
+  assertChatReady(waitForAccount, 'ehr83e8ebf7d43dbb9751a87af27b4ff')
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(waitForAccount.calls.find(call =>
+    call.Name === 'Chat.Chat.GetSingleChat').Content)), {
+    PersonAccId: 'person', EnterpriseAccId: 'ehr83e8ebf7d43dbb9751a87af27b4ff'
+  })
+  assert.equal(waitForAccount.page.jobId, '95364')
+  assert.equal(waitForAccount.page.resumeId, '182869')
 
   for (const limitsResponse of [
     { Code: 0, Data: { SuccessStep: { Tips: '请完善简历后再联系企业', StepName: '立即完善' } } },

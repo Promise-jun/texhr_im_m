@@ -106,12 +106,12 @@
 				const name = String(this.stepName || '').trim()
 				if (['升级', '立即升级', '立即开通', '申请开通'].includes(name)) {
 					return this.requestChatUpgrade()
-				}
-				if (name === '立即上传' && typeof window !== 'undefined') {
+				} else if (name === '立即上传' && typeof window !== 'undefined') {
 					// 错误页无需保留，直接在当前页面进入企业资质上传页。
 					window.location.href = 'https://www.texhr.cn/ehr/qualification/'
+				} else {
+					window.close()
 				}
-				// “知道了”及未支持的 StepName 仅展示按钮，不执行其它操作。
 			},
 			async requestChatUpgrade() {
 				if (this.isSubmitting || !this._errorPageAlive) return

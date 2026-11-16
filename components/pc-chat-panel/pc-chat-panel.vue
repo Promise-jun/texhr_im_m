@@ -3,7 +3,7 @@
 		<view class="chat-panel-header">
 			<view v-show="!limitsErrorMessage" class="job-context">
 				<text>当前沟通职位：</text>
-				<text class="job-name">{{ jobName || detail.jobName || '职位沟通' }}</text>
+				<text class="job-name">{{ jobName || detail.jobName || '无' }}</text>
 				<text class="action-link" @click="emitAction('switch-job', '切换职位')">切换</text>
 			</view>
 			<text class="chat-title">{{ otherUser.name || conversation.name }}</text>
@@ -16,8 +16,9 @@
 				<view v-if="messages.length" class="history-state" @click="loadEarlierMessages(false)">
 					{{ isLoadingHistory ? '正在加载聊天记录...' : historyExhausted ? '' : '加载更多消息' }}
 				</view>
-				<view v-if="isCheckingAccess || (isLoadingHistory && !messages.length)" class="message-state">
-					正在加载聊天记录...
+				<view v-if="isCheckingAccess || isWaitingForNim || (isLoadingHistory && !messages.length)"
+					class="message-state">
+					{{ isWaitingForNim ? '正在连接聊天服务...' : '正在加载聊天记录...' }}
 				</view>
 				<view v-if="historyError" class="message-state message-state--error" @click="retryLoad">
 					{{ historyError }}，点击重试
@@ -247,8 +248,10 @@
 <script>
 	import {
 		NIM_EVENT,
+		getNimLoginError,
 		getNimInstance,
 		isNimLoggedIn,
+		notifyNimNotReady,
 		setActiveConversationId,
 		getActiveConversationId,
 		clearActiveConversationId
@@ -259,7 +262,7 @@
 		formatConversationTime
 	} from '../../services/conversation'
 	import {
-		requestApi
+		requestApi, ensureChatLimitsBeforeChangeJob
 	} from '../../services/request'
 	import {
 		getTalentAvatar
@@ -514,6 +517,7 @@
 				accessError: '',
 				limitsErrorMessage: '',
 				isLoadingHistory: false,
+				isWaitingForNim: false,
 				historyExhausted: false,
 				historyError: '',
 				scrollTarget: '',
@@ -687,6 +691,7 @@
 			uni.$on(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
 			uni.$on(NIM_EVENT.MESSAGE_REVOKED, this.handleMessageRevoked)
 			uni.$on(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
+			uni.$on(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
 			if (this.skipInitialAccess) this.initializeExistingConversation()
 			else this.loadChatAccess()
 		},
@@ -701,6 +706,7 @@
 			uni.$off(NIM_EVENT.MESSAGE_RECEIVED, this.handleReceiveMessages)
 			uni.$off(NIM_EVENT.MESSAGE_REVOKED, this.handleMessageRevoked)
 			uni.$off(NIM_EVENT.LOGIN_STATUS, this.handleLoginStatus)
+			uni.$off(NIM_EVENT.LOGIN_FAILED, this.handleNimLoginFailed)
 			this.releaseCurrentConversation()
 		},
 		methods: {
@@ -845,14 +851,14 @@
 			},
 			handleSuccessStep(successStep, isClose) {
 				// 权限接口要求后续操作时，停用当前会话并复用统一的页面跳转逻辑。
-				this.accessReady = false
+				if (isClose) this.accessReady = false
 				const stepName = String(successStep && successStep.StepName || '').trim()
 				uni.showModal({
 					content: String(successStep && successStep.Tips || ''),
 					confirmText: stepName || '确定',
 					success: result => {
 						if (result && result.cancel && isClose) this.navigateBack()
-						if (result && result.confirm) return this.navigateByStep(stepName)
+						if (result && result.confirm) return this.navigateByStep(stepName, isClose)
 					}
 				})
 			},
@@ -872,6 +878,17 @@
 				})
 				if (!this._alive || !isCurrent() || this.conversationId !== conversationId ||
 					this.personAccId !== personAccId || this.enterpriseAccId !== enterpriseAccId) return false
+				const errorMessage = response && Number(response.Code) !== 0 ?
+					String(response.ErrorMessage || '').trim() : ''
+				if (errorMessage) {
+					uni.showModal({
+						title: '提示',
+						content: errorMessage,
+						showCancel: false,
+						confirmText: '确定'
+					})
+					return false
+				}
 				const data = responseData(response)
 				const successStep = data.SuccessStep || response.SuccessStep
 				if (successStep) {
@@ -880,7 +897,7 @@
 				}
 				return true
 			},
-			navigateByStep(stepName) {
+			navigateByStep(stepName, isClose) {
 				if (!this._alive || !this.visible || this.opening) return
 				const name = String(stepName || '').trim()
 				if (['升级', '立即升级', '立即开通', '申请开通'].includes(name)) return this.requestChatUpgrade()
@@ -892,7 +909,7 @@
 						title: '无法打开新窗口，请检查浏览器设置',
 						icon: 'none'
 					})
-				} else if (name === '知道了') {
+				} else if (name === '知道了' && isClose) {
 					this.navigateBack()
 				}
 			},
@@ -1031,9 +1048,14 @@
 			},
 			prepareConversation() {
 				if (!isNimLoggedIn()) {
-					this.historyError = '聊天服务尚未就绪'
+					const loginError = getNimLoginError()
+					if (loginError) return this.handleNimLoginFailed(loginError)
+					this.isWaitingForNim = true
+					this.historyError = ''
 					return
 				}
+				this.isWaitingForNim = false
+				this.historyError = ''
 				this.activateConversation()
 				this.loadUserProfiles()
 				this.loadEarlierMessages(true)
@@ -1043,10 +1065,17 @@
 					this.prepareConversation()
 					this.sendPendingChatGreeting()
 				} else if (status !== 1) {
+					this.isWaitingForNim = true
+					this.historyError = ''
 					// 断线后旧黑名单缓存不可用于写入，重新登录并展开菜单时再查询。
 					this.blockStatusLoaded = false
 					this.releaseCurrentConversation()
 				}
+			},
+			handleNimLoginFailed(error) {
+				if (!this._alive) return
+				this.isWaitingForNim = false
+				this.historyError = error && (error.message || error.desc) || '聊天服务连接失败'
 			},
 			activateConversation() {
 				if (!this.visible || !this.accessReady || !isNimLoggedIn()) return
@@ -1428,7 +1457,8 @@
 					return true
 				} catch (error) {
 					if (this._alive && this.personAccId === personAccId) {
-						this.blockStatusError = error && error.message ? error.message : '查询黑名单状态失败'
+						this.blockStatusError = !isNimLoggedIn() ? '' :
+							error && error.message ? error.message : '查询黑名单状态失败'
 						console.warn('[PC Chat] 查询用户云信黑名单状态失败', error)
 					}
 					return false
@@ -1447,11 +1477,15 @@
 					})
 					return
 				}
-				if (!this.personAccId || !isNimLoggedIn()) {
+				if (!this.personAccId) {
 					uni.showToast({
-						title: !this.personAccId ? '未获取到聊天对象账号' : '聊天服务尚未就绪',
+						title: '未获取到聊天对象账号',
 						icon: 'none'
 					})
+					return
+				}
+				if (!isNimLoggedIn()) {
+					notifyNimNotReady()
 					return
 				}
 				// 首次查询或查询失败后的点击只重试查询，用户确认新文案后再点击执行操作。
@@ -1582,9 +1616,20 @@
 
 				const conversationId = this.conversationId
 				this.isSwitchingJob = true
+				const jobId = this.jobId
+				const resumeId = this.resumeId
+				const personAccId = this.personAccId
+				const enterpriseAccId = this.enterpriseAccId
+				const isCurrent = () => this._alive && this.visible && !this.opening &&
+					this.conversationId === conversationId && this.jobId === jobId && this.resumeId === resumeId &&
+					this.personAccId === personAccId && this.enterpriseAccId === enterpriseAccId
+				let hasStartedChange = false
 				let switchedJob = null
 				let enterprise = null
 				try {
+					await ensureChatLimitsBeforeChangeJob(targetJobId, resumeId)
+					if (!isCurrent()) return
+					hasStartedChange = true
 					// 职位切换接口由移动端共用：成功返回 Enterprise 后，再通知云信双方更新职位上下文。
 					const response = await requestApi({
 						Name: CHANGE_CHAT_JOB_API,
@@ -1638,6 +1683,11 @@
 					this.scrollToBottom()
 					this.$emit('changed')
 				} catch (error) {
+					if (!hasStartedChange && !isCurrent()) return
+					if (error && error.chatLimitsSuccessStep) {
+						if (isCurrent()) this.handleSuccessStep(error.chatLimitsSuccessStep, false)
+						return
+					}
 					if (this._alive) uni.showToast({
 						title: switchedJob ?
 							'职位已切换，但消息发送失败' : error.message || '切换聊天职位失败',
@@ -1756,10 +1806,7 @@
 				// 与消息类型无关的发送入口：统一查询、发送锁、错误码提示和成功回执处理。
 				if (!this._alive || !this.canSendText || typeof createMessage !== 'function') return false
 				if (!this.conversationId || !isNimLoggedIn()) {
-					uni.showToast({
-						title: '聊天服务尚未就绪',
-						icon: 'none'
-					})
+					notifyNimNotReady('send')
 					return false
 				}
 				const conversationId = this.conversationId
@@ -1834,10 +1881,7 @@
 					return
 				}
 				if (!this.conversationId || !isNimLoggedIn()) {
-					uni.showToast({
-						title: '聊天服务尚未就绪',
-						icon: 'none'
-					})
+					notifyNimNotReady()
 					return
 				}
 				const conversationId = this.conversationId

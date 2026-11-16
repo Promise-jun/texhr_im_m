@@ -197,7 +197,8 @@
 		getNimInstance,
 		getNimLoginError,
 		isNimConversationSynced,
-		isNimLoggedIn
+		isNimLoggedIn,
+		notifyNimNotReady
 	} from '../../../services/nim'
 	import {
 		getAllNimConversations,
@@ -532,7 +533,7 @@
 					|| !conversation || conversation.isHistory || conversation.type !== 1 || !conversation.id
 					|| this.updatingPinConversationId || this.deletingConversationId) return
 				if (!isNimLoggedIn()) {
-					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					notifyNimNotReady()
 					return
 				}
 				const nim = getNimInstance()
@@ -609,7 +610,7 @@
 					|| !conversation || conversation.isHistory || conversation.type !== 1 || !conversation.id
 					|| this.deletingConversationId || this.updatingPinConversationId) return
 				if (!isNimLoggedIn()) {
-					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					notifyNimNotReady()
 					return
 				}
 				this.closeConversationMenu()
@@ -1201,7 +1202,8 @@
 					return
 				}
 				if (!isNimLoggedIn() || conversation.type !== 1) {
-					uni.showToast({ title: conversation.type !== 1 ? '请选择人才单聊会话' : '聊天服务尚未就绪', icon: 'none' })
+					if (conversation.type !== 1) uni.showToast({ title: '请选择人才单聊会话', icon: 'none' })
+					else notifyNimNotReady()
 					return
 				}
 
@@ -1344,6 +1346,17 @@
 					Content: { JobId: jobId, ResumeId: detail.resumeId }
 				})
 				if (isCurrent && !isCurrent()) return false
+				const errorMessage = limitsResponse && Number(limitsResponse.Code) !== 0 ?
+					String(limitsResponse.ErrorMessage || '').trim() : ''
+				if (errorMessage) {
+					uni.showModal({
+						title: '提示',
+						content: errorMessage,
+						showCancel: false,
+						confirmText: '确定'
+					})
+					return false
+				}
 				if (!limitsResponse || Number(limitsResponse.Code) !== 0) {
 					const code = limitsResponse && limitsResponse.Code !== undefined ? limitsResponse.Code : 'unknown'
 					throw new Error(`获取沟通状态失败，业务错误码：${code}`)
@@ -1360,15 +1373,7 @@
 				}
 				if (limitsData.SuccessStep || limitsResponse.SuccessStep) {
 					// 让实时聊天面板用同一份 Limits 响应执行企业端 SuccessStep 逻辑。
-					const stepDetail = {
-						...this.updateContinueJobDetail(detail, enterprise),
-						initialAccess: { ...limitsResponse, Data: limitsResponse.Data === undefined ? limitsData : limitsResponse.Data }
-					}
-					this.historyChatDetail = stepDetail
-					this.chatDetail = stepDetail
-					this.selectedId = stepDetail.conversationId
-					this.activeMessageTab = 'all'
-					this.activeMainTab = 'recent'
+					this.showContinueChatSuccessStep(this.updateContinueJobDetail(detail, enterprise), limitsResponse)
 					return false
 				}
 				const nim = getNimInstance()
@@ -1390,6 +1395,14 @@
 				if (!result || !result.message) throw new Error(enterprise ? '职位切换自定义消息发送失败' : '继续聊天消息发送失败')
 				if (isCurrent && !isCurrent()) return false
 				return true
+			},
+			showContinueChatSuccessStep(detail, response) {
+				const stepDetail = { ...detail, initialAccess: response }
+				this.historyChatDetail = stepDetail
+				this.chatDetail = stepDetail
+				this.selectedId = stepDetail.conversationId
+				this.activeMessageTab = 'all'
+				this.activeMainTab = 'recent'
 			},
 			updateContinueJobDetail(detail, enterprise) {
 				const job = enterprise || {}
@@ -1413,7 +1426,7 @@
 				if (!this._conversationPageAlive || !this.pageVisible || this.activeMainTab !== 'history'
 					|| this.openingConversationId || this.isContinuingHistoryChat || !this.historyChatDetail) return
 				if (!isNimLoggedIn()) {
-					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					notifyNimNotReady('send')
 					return
 				}
 				const detail = this.historyChatDetail
@@ -1440,8 +1453,9 @@
 							return
 						}
 						// 文档 2264：切换成功后返回 Enterprise，必须把同一个对象作为 type=5 消息 data。
-						const enterprise = await changeHistoryChatJob(detail.personAccId, detail.enterpriseAccId, selectedJobId)
-						if (!isCurrent()) return
+						const enterprise = await changeHistoryChatJob(detail.personAccId, detail.enterpriseAccId,
+							selectedJobId, detail.resumeId, isCurrent)
+						if (!isCurrent() || !enterprise) return
 						const sent = await this.sendContinueHistoryMessage(detail, enterprise, isCurrent)
 						if (!sent || !isCurrent()) return
 						this.cancelOpeningConversation()
@@ -1464,8 +1478,9 @@
 						const confirmed = await this.confirmContinueJobSwitch()
 						if (!confirmed || !isCurrent()) return
 						// 文档 2264：传入当前历史职位 ID，成功后使用返回 Enterprise 发送 type=5。
-						enterprise = await changeHistoryChatJob(detail.personAccId, detail.enterpriseAccId, currentJobId)
-						if (!isCurrent()) return
+						enterprise = await changeHistoryChatJob(detail.personAccId, detail.enterpriseAccId,
+							currentJobId, detail.resumeId, isCurrent)
+						if (!isCurrent() || !enterprise) return
 						const sent = await this.sendContinueHistoryMessage(detail, enterprise, isCurrent)
 						if (!sent) return
 					} else {
@@ -1483,6 +1498,10 @@
 					this.activeMessageTab = 'all'
 					this.activeMainTab = 'recent'
 				} catch (error) {
+					if (isCurrent() && error && error.chatLimitsSuccessStep) {
+						this.showContinueChatSuccessStep({ ...detail, jobId: error.chatLimitsJobId }, error.chatLimitsResponse)
+						return
+					}
 					if (isCurrent()) uni.showToast({ title: error && error.message ? error.message : '获取职位状态失败，请重试', icon: 'none' })
 				} finally {
 					if (requestId === this._continueHistoryRequestId) this.isContinuingHistoryChat = false

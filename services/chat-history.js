@@ -1,4 +1,4 @@
-import { requestApi } from './request'
+import { requestApi, ensureChatLimitsBeforeChangeJob } from './request'
 import { parseNimEmojiText } from './nim-emoji'
 import { getTalentAvatar } from './talent-avatar'
 
@@ -91,11 +91,15 @@ export async function getHistoryChatButton(jobId, resumeId) {
 }
 
 /** 文档 2264：切换到详情页或列表选中的目标职位，IsMessage=true 返回 Enterprise 卡片。 */
-export async function changeHistoryChatJob(personAccId, enterpriseAccId, jobId) {
+export async function changeHistoryChatJob(personAccId, enterpriseAccId, jobId, resumeId, isCurrent = () => true) {
 	const person = accountId(personAccId)
 	const enterprise = accountId(enterpriseAccId)
 	const job = accountId(jobId)
 	if (!person || !enterprise || !job) throw new Error('缺少切换聊天职位所需信息')
+	if (!isCurrent()) return null
+	// 个人端可省略 ResumeId；企业端由前置检查要求传入，参数仅用于 Limits。
+	await ensureChatLimitsBeforeChangeJob(job, resumeId)
+	if (!isCurrent()) return null
 	const response = await requestApi({
 		Name: CHAT_CHANGE_JOB_API,
 		Content: { PersonAccId: person, EnterpriseAccId: enterprise, JobId: job, IsMessage: true }

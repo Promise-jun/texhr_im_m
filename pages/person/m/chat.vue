@@ -320,7 +320,7 @@
 
 <script>
 	import {
-		requestApi
+		requestApi, ensureChatLimitsBeforeChangeJob
 	} from '../../../services/request'
 	import {
 		DEFAULT_TALENT_AVATAR,
@@ -335,6 +335,7 @@
 		getNimLoginError,
 		getNimInstance,
 		isNimLoggedIn,
+		notifyNimNotReady,
 		setActiveConversationId
 	} from '../../../services/nim'
 	import {
@@ -1003,6 +1004,11 @@
 					return
 				}
 				this.loadUserProfiles()
+				if (this._waitingForPersonAccId) {
+					this._waitingForPersonAccId = false
+					this.isWaitingForNim = false
+					this.loadChatAccess()
+				}
 				if (!this.enterpriseAccId) return
 				Promise.resolve(this.prepareNimConversation())
 					.then(() => this.sendPendingChatGreeting())
@@ -1013,7 +1019,9 @@
 					})
 			},
 			handleNimLoginFailed(error) {
-				if (!this.enterpriseAccId || this.conversationId) return
+				const entryAccounts = this._chatEntryAccounts || {}
+				if (!(this.enterpriseAccId || entryAccounts.EnterpriseAccId) || this.conversationId) return
+				this._waitingForPersonAccId = false
 				this.isWaitingForNim = false
 				this.historyLoadError = error && (error.message || error.desc) ?
 					error.message || error.desc :
@@ -1025,6 +1033,20 @@
 					this.historyLoadError = '缺少 jobId'
 					return
 				}
+				const entryAccounts = this._chatEntryAccounts || {}
+				if (!this.shouldCheckChatLimits && !entryAccounts.PersonAccId && !this.getCurrentPersonAccId()) {
+					const loginError = getNimLoginError()
+					if (loginError) {
+						this.handleNimLoginFailed(loginError)
+						return
+					}
+					this._waitingForPersonAccId = true
+					this.isWaitingForNim = true
+					this.historyLoadError = ''
+					return
+				}
+				this._waitingForPersonAccId = false
+				this.isWaitingForNim = false
 
 				this.isCheckingLimits = true
 				this.historyLoadError = ''
@@ -1147,15 +1169,18 @@
 				}
 			},
 			async loadSingleChat() {
-				const accounts = this._chatEntryAccounts || {}
-				if (!accounts.PersonAccId || !accounts.EnterpriseAccId) {
+				const entryAccounts = this._chatEntryAccounts || {}
+				const personAccId = entryAccounts.PersonAccId || this.getCurrentPersonAccId()
+				const enterpriseAccId = entryAccounts.EnterpriseAccId
+				if (!personAccId || !enterpriseAccId) {
 					throw new Error('缺少 personAccId 或 enterpriseAccId')
 				}
+				this._chatEntryAccounts = { ...entryAccounts, PersonAccId: personAccId }
 				const response = await requestApi({
 					Name: CHAT_GET_SINGLE_API,
 					Content: {
-						PersonAccId: accounts.PersonAccId,
-						EnterpriseAccId: accounts.EnterpriseAccId
+						PersonAccId: personAccId,
+						EnterpriseAccId: enterpriseAccId
 					}
 				})
 				if (!response || Number(response.Code) !== 0) {
@@ -1177,6 +1202,12 @@
 					if (!this.resumeId) this.resumeId = String(resumeId).trim()
 				}
 				return response
+			},
+			getCurrentPersonAccId() {
+				const nim = getNimInstance()
+				const loginService = nim && nim.V2NIMLoginService
+				return loginService && typeof loginService.getLoginUser === 'function' ?
+					String(loginService.getLoginUser() || '').trim() : ''
 			},
 			handleSuccessStep(successStep) {
 				this.historyExhausted = true
@@ -1275,6 +1306,7 @@
 					// 招呼语流程：先发送 { type: 4, data: Limits.Message } 自定义消息，再发送 Greetings 文本消息。
 					if (!pendingGreeting.customSent) {
 						if (!await this.checkChatLimitsBeforeSend()) return
+						await this.checkOtherBlockedBeforeSend()
 						const customMessage = messageCreator.createCustomMessage('', JSON.stringify({
 							type: 4,
 							data: pendingGreeting.limitsMessage
@@ -1289,6 +1321,7 @@
 					}
 
 					if (!await this.checkChatLimitsBeforeSend()) return
+					await this.checkOtherBlockedBeforeSend()
 					const textMessage = messageCreator.createTextMessage(maskPhoneNumbers(pendingGreeting
 						.greetingText))
 					const textResult = await messageService.sendMessage(textMessage, this.conversationId)
@@ -1317,11 +1350,23 @@
 				}
 
 				this.isSwitchingChatJob = true
+				const personAccId = this.personAccId
+				const conversationId = this.conversationId
+				const resumeId = this.resumeId
+				const currentJobId = this.jobId
+				const currentEnterpriseAccId = this.enterpriseAccId
+				const isCurrent = () => this._chatPageAlive && this.personAccId === personAccId &&
+					this.conversationId === conversationId && this.resumeId === resumeId &&
+					this.jobId === currentJobId && this.enterpriseAccId === currentEnterpriseAccId
+				let hasStartedChange = false
 				uni.showLoading({
 					title: '切换中',
 					mask: true
 				})
 				try {
+					await ensureChatLimitsBeforeChangeJob(targetJobId, resumeId)
+					if (!isCurrent()) return
+					hasStartedChange = true
 					const response = await requestApi({
 						Name: CHANGE_CHAT_JOB_API,
 						Content: {
@@ -1377,6 +1422,11 @@
 					await this.mergeMessages([result.message])
 					this.$nextTick(() => this.scrollToBottom(true))
 				} catch (error) {
+					if (!hasStartedChange && !isCurrent()) return
+					if (error && error.chatLimitsSuccessStep) {
+						if (isCurrent()) this.handleSuccessStep(error.chatLimitsSuccessStep)
+						return
+					}
 					uni.showToast({
 						title: error && error.message ? error.message : '切换聊天职位失败',
 						icon: 'none'
@@ -2014,10 +2064,7 @@
 					return
 				}
 				if (!isNimLoggedIn()) {
-					uni.showToast({
-						title: '聊天服务尚未就绪',
-						icon: 'none'
-					})
+					notifyNimNotReady()
 					return
 				}
 
@@ -2161,10 +2208,7 @@
 					return
 				}
 				if (!this.conversationId || !isNimLoggedIn()) {
-					uni.showToast({
-						title: '聊天服务尚未就绪',
-						icon: 'none'
-					})
+					notifyNimNotReady()
 					return
 				}
 
@@ -2575,10 +2619,7 @@
 				if (this.isRecording || this._voiceFinishing || this.isSendingMessage || this.isTranscribingVoice)
 					return
 				if (!this.conversationId || !isNimLoggedIn()) {
-					uni.showToast({
-						title: '聊天服务尚未就绪',
-						icon: 'none'
-					})
+					notifyNimNotReady('send')
 					return
 				}
 
@@ -3656,10 +3697,7 @@
 			async selectAndSendImage(sourceType) {
 				if (this.isSendingMessage || this.isSelectingImage) return
 				if (!this.conversationId || !isNimLoggedIn()) {
-					uni.showToast({
-						title: '聊天服务尚未就绪',
-						icon: 'none'
-					})
+					notifyNimNotReady('send')
 					return
 				}
 
@@ -3825,10 +3863,7 @@
 			async sendTextContent(content) {
 				if (this.isSendingMessage || this.isSelectingImage) return false
 				if (!this.conversationId || !isNimLoggedIn()) {
-					uni.showToast({
-						title: '聊天服务尚未就绪',
-						icon: 'none'
-					})
+					notifyNimNotReady('send')
 					return false
 				}
 

@@ -328,8 +328,9 @@
 						}
 						// 先检查云信是否就绪，避免职位已经切换却无法发送变更消息。
 						this.getContinueMessageContext(targetAccId)
-						const enterprise = await changeHistoryChatJob(PersonAccId, targetAccId, targetJobId)
-						if (!this._detailPageAlive) return
+						const enterprise = await changeHistoryChatJob(PersonAccId, targetAccId, targetJobId, undefined,
+							() => this._detailPageAlive && this._pendingContinueChat === pending)
+						if (!this._detailPageAlive || !enterprise) return
 						pending.enterprise = enterprise
 					}
 					const sent = await this.sendContinueChatMessages(pending)
@@ -337,6 +338,10 @@
 					await this.openContinuedChat(pending)
 				} catch (error) {
 					if (!this._detailPageAlive) return
+					if (error && error.chatLimitsSuccessStep) {
+						await this.openContinuedChat(this._pendingContinueChat, error.chatLimitsSuccessStep)
+						return
+					}
 					uni.showToast({ title: error && error.message || '继续聊天失败，请重试', icon: 'none' })
 					console.error('[ChatHistory] 继续聊天失败', error)
 				} finally {

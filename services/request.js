@@ -16,6 +16,9 @@ export const AUTH_COOKIE_KEYS = Object.freeze({
 })
 
 const REQUEST_TIMEOUT = 15000
+const CHAT_LIMITS_API = 'Chat.MyChat.Limits'
+// 只在当前运行期间记录；普通 Limits 请求始终访问接口，切换职位前才复用记录。
+const chatLimitsRequests = new Map()
 
 const SPECIAL_CODE_MESSAGES = Object.freeze({
 	'9000002': '登录失效',
@@ -53,6 +56,10 @@ function redirectToLoginForSpecialCode(responseData) {
 	if (!SPECIAL_CODE_MESSAGES[String(responseData.Code)]) return
 
 	// #ifdef H5
+	// 登录态已失效，跳转完成前隐藏页面及可能由后续回调弹出的提示。
+	if (typeof document !== 'undefined' && document.body) {
+		document.body.style.display = 'none'
+	}
 	if (typeof window !== 'undefined' && window.location) {
 		const loginUrl = isEnterprisePage() ?
 			'http://www.texhr.cn/ehr/login.html' :
@@ -175,24 +182,21 @@ function isEnterprisePage() {
 }
 
 function getAuthFromCookie(isEnterprise) {
-	// 获取当前页面url
+	// // 获取当前页面url
 	const url = window.location.pathname;
 	// 判断是否包含 ehr（区分大小写，EHR 匹配不到）
 	if (url.includes('ehr')) {
 		return {
 			EnterpriseId: 198185,
-			Token: 'hg-q-iOwhcaex3jVIYy_',
+			Token: 'scX23qFZ7XnH0Zv9bxvQ',
+			// EnterpriseId: 19441,
+			// Token: 'JAkHgZKpTWW07SFeUExL',
 		}
 	} else {
 		return {
-			PersonId: 251780,
-			Token: '_rD7X-ysNd3we0uwut2M',
+			PersonId: 210902,
+			Token: 'ngdt5-6x3DuQ1L0BdFGj',
 		}
-		// PersonId: 251796,
-		// Token: 'TDRlwYefEhhwHY0jQJxq',
-		
-		// PersonId: 210902,
-		// Token: 'TbSkxQU7Eqz5uSksRplt',
 	}
 
 	const idField = isEnterprise ? 'EnterpriseId' : 'PersonId'
@@ -253,6 +257,59 @@ export function createRequestPayload({
 	}
 }
 
+function chatLimitsKey(payload) {
+	const content = JSON.parse(payload.Content)
+	const jobId = String(content.JobId === undefined || content.JobId === null ? '' : content.JobId).trim()
+	const resumeId = String(content.ResumeId === undefined || content.ResumeId === null ? '' : content.ResumeId).trim()
+	if (!jobId || (payload.Platform === 2 && !resumeId)) return ''
+	// 个人身份已确定自己的简历；企业端必须按简历隔离，不能复用其他人才的记录。
+	return JSON.stringify([requestConfig.apiUrl, payload.Platform, payload.PersonId, payload.EnterpriseId,
+		payload.Token, payload.Version, jobId, payload.Platform === 2 ? resumeId : ''])
+}
+
+function chatLimitsData(response) {
+	if (!response || response.Code === undefined || Number(response.Code) !== 0) {
+		const code = response && response.Code !== undefined ? response.Code : 'unknown'
+		throw new Error(response && response.ErrorMessage || `获取沟通状态失败，业务错误码：${code}`)
+	}
+	let data = response.Data
+	if (data === undefined || data === null || data === '') data = {}
+	else if (typeof data === 'string') {
+		try { data = JSON.parse(data) } catch (error) {
+			throw new Error('沟通限制接口返回的数据格式不正确')
+		}
+	}
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new Error('沟通限制接口返回的数据格式不正确')
+	}
+	if (data.Code !== undefined && Number(data.Code) !== 0) {
+		throw new Error(`获取沟通状态失败，数据错误码：${data.Code}`)
+	}
+	return data
+}
+
+/** 切换职位前补齐 Limits；共用进行中的请求，失败和 SuccessStep 不保留成功记录。 */
+export async function ensureChatLimitsBeforeChangeJob(jobId, resumeId) {
+	const job = String(jobId === undefined || jobId === null ? '' : jobId).trim()
+	const resume = String(resumeId === undefined || resumeId === null ? '' : resumeId).trim()
+	if (!job) throw new Error('缺少沟通职位信息')
+	const content = { JobId: job, ...(resume ? { ResumeId: resume } : {}) }
+	const payload = createRequestPayload({ Name: CHAT_LIMITS_API, Content: content })
+	if (payload.Platform === 2 && !resume) throw new Error('缺少沟通简历信息')
+	const previous = chatLimitsRequests.get(chatLimitsKey(payload))
+	const response = await (previous ? previous.promise : requestApi({ Name: CHAT_LIMITS_API, Content: content }))
+	const data = chatLimitsData(response)
+	const successStep = data.SuccessStep || response.SuccessStep
+	if (successStep) {
+		const error = new Error(successStep.Tips || '请先完成沟通权限操作')
+		// 页面沿用各端已有的 SuccessStep 操作，不能继续执行 ChangeJob。
+		error.chatLimitsSuccessStep = successStep
+		error.chatLimitsResponse = response
+		error.chatLimitsJobId = job
+		throw error
+	}
+}
+
 /**
  * 统一调用 texhr OpenAPI。
  *
@@ -274,6 +331,27 @@ export async function requestApi({
 		Version,
 		Ip: ''
 	})
+	if (data.Name !== CHAT_LIMITS_API) return sendApiRequest(data)
+	let key = ''
+	try { key = chatLimitsKey(data) } catch (error) { /* 无效参数仍由接口按原流程返回。 */ }
+	const record = {}
+	record.promise = sendApiRequest(data).then(response => {
+		let canReuse = false
+		try {
+			const limits = chatLimitsData(response)
+			canReuse = !(limits.SuccessStep || response.SuccessStep)
+		} catch (error) { /* 业务失败和格式错误不能作为成功记录。 */ }
+		if (!canReuse && chatLimitsRequests.get(key) === record) chatLimitsRequests.delete(key)
+		return response
+	}, error => {
+		if (chatLimitsRequests.get(key) === record) chatLimitsRequests.delete(key)
+		throw error
+	})
+	if (key) chatLimitsRequests.set(key, record)
+	return record.promise
+}
+
+async function sendApiRequest(data) {
 	const response = await uniRequest({
 		url: requestConfig.apiUrl,
 		method: 'POST',

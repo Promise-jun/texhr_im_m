@@ -75,7 +75,8 @@
 		getActiveConversationId,
 		getNimInstance,
 		getNimLoginError,
-		isNimLoggedIn
+		isNimLoggedIn,
+		notifyNimNotReady
 	} from '../../../services/nim'
 	import {
 		getHistoryConversationsPage,
@@ -285,7 +286,7 @@
 				if (!conversation || conversation.isHistory || !conversation.id || this.updatingPinConversationId ||
 					this.deletingConversationId) return
 				if (!isNimLoggedIn()) {
-					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					notifyNimNotReady()
 					return
 				}
 
@@ -376,7 +377,7 @@
 			async deleteConversation(conversation) {
 				if (!conversation || conversation.isHistory || !conversation.id || this.deletingConversationId) return
 				if (!isNimLoggedIn()) {
-					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					notifyNimNotReady()
 					return
 				}
 
@@ -743,7 +744,7 @@
 					return
 				}
 				if (!isNimLoggedIn()) {
-					uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
+					notifyNimNotReady()
 					return
 				}
 

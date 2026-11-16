@@ -3,6 +3,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const requestApiEnvironment = require('./request-api-helper.cjs')
 const root = path.resolve(__dirname, '..')
 const source = file => fs.readFileSync(path.join(root, file), 'utf8')
 const pageSource = source('pages/ehr/pc/chat.vue')
@@ -67,6 +68,7 @@ function environment() {
       showModal: options => { modals.push(options); if (options.success) options.success({ confirm: true }) }
     }
   }
+  Object.assign(globals, requestApiEnvironment(globals.requestApi, { enterprise: true }))
   const serviceContext = vm.createContext(globals)
   vm.runInContext(source('services/chat-history.js').replace(/import[^\n]+\n/g, '').replace(/^export /gm, ''), serviceContext)
   globals.getHistoryChatMessages = serviceContext.getHistoryChatMessages
@@ -318,9 +320,11 @@ async function verifyContinueJobSwitch() {
   assert.deepStrictEqual(env.calls, [
     { Name: 'Chat.Person.GetJobState', Content: { JobId: 'job-current' } },
     { Name: 'Chat.ChatButton.Get', Content: { JobId: 'job-current', ResumeId: 'resume-a' } },
+    { Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-current', ResumeId: 'resume-a' } },
     { Name: 'Chat.Chat.ChangeJob', Content: {
       PersonAccId: 'a', EnterpriseAccId: 'enterprise', JobId: 'job-current', IsMessage: true
-    } }
+    } },
+    { Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-current', ResumeId: 'resume-a' } }
   ])
   assert.equal(env.sentMessages.length, 1)
   assert.equal(env.sentMessages[0].conversationId, 'p2p-a')
