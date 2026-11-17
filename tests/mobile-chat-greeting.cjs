@@ -18,6 +18,7 @@ async function verify() {
   const eventOrder = []
   const browserLocation = { href: '' }
   const modals = []
+  const toasts = []
   let limitsSuccessStep = null
   let limitsErrorMessage = ''
   let pageBackCount = 0
@@ -99,7 +100,7 @@ async function verify() {
       showModal: options => modals.push(options),
       showLoading() {},
       hideLoading() {},
-      showToast() {},
+      showToast: options => toasts.push(options),
       navigateBack: () => { pageBackCount += 1 },
       $emit() {}
     },
@@ -294,6 +295,30 @@ async function verify() {
   await definition.onLoad.call(page, { jobId: 'job-7', resumeId: 'resume-3', limit: 'true' })
   assert.equal(page._skipInitialChatGreeting, false)
   assert.equal(sent.length, sentCount + 2)
+
+  const originalLoadUserProfiles = page.loadUserProfiles
+  const originalLoadCommonPhrases = page.loadCommonPhrases
+  const originalLoadChatAccess = page.loadChatAccess
+  const originalLoadSendResumeStatus = page.loadSendResumeStatus
+  page.loadUserProfiles = () => {}
+  page.loadCommonPhrases = () => {}
+  page.loadChatAccess = async () => {}
+  page.loadSendResumeStatus = () => {}
+  const toastCountBeforeDeferredWarning = toasts.length
+  await definition.onLoad.call(page, {
+    personAccId: 'person-1', enterpriseAccId: 'enterprise-2', blockedWarning: '1'
+  })
+  assert.equal(toasts.length, toastCountBeforeDeferredWarning)
+  definition.onReady.call(page)
+  assert.deepEqual(toasts[toasts.length - 1], {
+    title: '对方在您的黑名单中，无法回复您的消息', icon: 'none', duration: 2500
+  })
+  definition.onReady.call(page)
+  assert.equal(toasts.length, toastCountBeforeDeferredWarning + 1)
+  page.loadUserProfiles = originalLoadUserProfiles
+  page.loadCommonPhrases = originalLoadCommonPhrases
+  page.loadChatAccess = originalLoadChatAccess
+  page.loadSendResumeStatus = originalLoadSendResumeStatus
 
   const forwardedStep = { Tips: '请在聊天前完善简历', StepName: '立即完善' }
   const limitsBeforeForwardedStep = calls.filter(call => call.Name === 'Chat.MyChat.Limits').length

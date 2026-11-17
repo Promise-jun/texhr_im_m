@@ -16,7 +16,7 @@ const message = (id, time) => ({
 })
 
 function environment({ loggedIn = true, accountId = 'person', switchFails = false, singleResponse, limitsResponse } = {}) {
-  const calls = [], modals = [], sent = [], historyRequests = [], profiles = [], reads = [], toasts = []
+  const calls = [], modals = [], sent = [], historyRequests = [], profiles = [], reads = [], toasts = [], blockChecks = []
   const listeners = new Map()
   const state = { loggedIn, accountId }
   const nim = {
@@ -25,6 +25,9 @@ function environment({ loggedIn = true, accountId = 'person', switchFails = fals
     V2NIMUserService: { getUserListFromCloud: async accounts => {
       profiles.push(...accounts)
       return accounts.map(accountId => ({ accountId, avatar: `${accountId}.png` }))
+    }, checkBlock: async accounts => {
+      blockChecks.push(accounts)
+      return Object.fromEntries(accounts.map(accountId => [accountId, false]))
     } },
     V2NIMMessageCreator: {
       createTextMessage: text => ({ text, messageType: 0 }),
@@ -90,7 +93,7 @@ function environment({ loggedIn = true, accountId = 'person', switchFails = fals
   const page = { ...definition.data(), $nextTick: callback => Promise.resolve().then(callback) }
   for (const [name, method] of Object.entries(definition.methods)) page[name] = method.bind(page)
   return {
-    page, calls, modals, sent, historyRequests, profiles, reads, listeners, state, toasts,
+    page, calls, modals, sent, historyRequests, profiles, reads, listeners, state, toasts, blockChecks,
     enter: async (options = { jobId: 'new-job', resumeId: 'resume', limit: 'true' }) => {
       const loading = definition.onLoad.call(page, options)
       definition.onShow.call(page)
@@ -136,6 +139,8 @@ async function verify() {
     if (action === 'confirm') {
       assert.equal(switches[0].Content.JobId, 'new-job')
       assert.equal(env.sent.length, 1)
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(env.blockChecks)), [['enterprise']],
+        '职位切换消息 checks the enterprise block status before send')
       assert.equal(env.sent[0].conversationId, 'p2p-enterprise')
       assert.deepStrictEqual(JSON.parse(env.sent[0].value.attachment.raw), {
         type: 5, data: { JobId: 'new-job', JobName: '新职位' }

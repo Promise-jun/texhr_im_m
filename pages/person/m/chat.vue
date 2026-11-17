@@ -909,6 +909,7 @@
 			this.externalReturnUrl = getExternalReturnUrl(options)
 			// 历史详情的继续聊聊已发送指定消息，此入口不再重复发送初始化招呼语。
 			this._skipInitialChatGreeting = String(options.skipGreeting || '') === '1'
+			this._showBlockedWarningOnReady = String(options.blockedWarning || '') === '1'
 			const rawSuccessStep = options.successStep
 			if (rawSuccessStep && typeof rawSuccessStep === 'object') this.initialSuccessStep = rawSuccessStep
 			else if (typeof rawSuccessStep === 'string' && rawSuccessStep.trim()) {
@@ -945,6 +946,15 @@
 			this.loadCommonPhrases()
 			await this.loadChatAccess()
 			this.loadSendResumeStatus()
+		},
+		onReady() {
+			if (!this._chatPageAlive || !this._showBlockedWarningOnReady) return
+			this._showBlockedWarningOnReady = false
+			uni.showToast({
+				title: BLOCKED_USER_SEND_WARNING,
+				icon: 'none',
+				duration: 2500
+			})
 		},
 		onUnload() {
 			this._chatPageAlive = false
@@ -1416,6 +1426,7 @@
 					}
 					const message = nim.V2NIMMessageCreator.createCustomMessage('', JSON.stringify(customMessageBody))
 					if (!await this.checkChatLimitsBeforeSend()) return
+					await this.checkOtherBlockedBeforeSend()
 					const result = await messageService.sendMessage(message, this.conversationId)
 					if (!result || !result.message) throw new Error('自定义消息发送失败：SDK 未返回消息')
 

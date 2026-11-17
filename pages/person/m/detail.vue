@@ -453,11 +453,31 @@
 				}
 				return true
 			},
+			async checkOtherBlockedBeforeSend(enterpriseAccId, pending) {
+				if (!enterpriseAccId || !isNimLoggedIn()) return false
+
+				try {
+					const userService = getNimInstance().V2NIMUserService
+					if (!userService || typeof userService.checkBlock !== 'function') {
+						console.warn('[ChatHistory] 当前聊天服务不支持发送前查询黑名单状态')
+						return false
+					}
+					const blockStatus = await userService.checkBlock([enterpriseAccId])
+					const isBlocked = Boolean(blockStatus && blockStatus[enterpriseAccId])
+					if (isBlocked && pending) pending.blockedWarning = true
+					return isBlocked
+				} catch (error) {
+					console.warn('[ChatHistory] 发送前查询用户云信黑名单状态失败，继续发送消息', error)
+					return false
+				}
+			},
 			async sendContinueChatMessages(pending) {
 				const { creator, service, conversationId } = this.getContinueMessageContext(pending.enterpriseAccId)
 				// 切换成功先发送 type=5 卡片；逐条等待 SDK 回执，失败重试不重发已成功的消息。
 				if (pending.enterprise && !pending.customSent) {
 					if (!await this.checkContinueChatLimits(pending)) return false
+					await this.checkOtherBlockedBeforeSend(pending.enterpriseAccId, pending)
+					if (!this._detailPageAlive || this._pendingContinueChat !== pending) return false
 					const message = creator.createCustomMessage('', JSON.stringify({ type: 5, data: pending.enterprise }))
 					const result = await service.sendMessage(message, conversationId)
 					if (!result || !result.message) throw new Error('职位变更消息发送失败')
@@ -466,6 +486,8 @@
 				}
 				if (!pending.textSent) {
 					if (!await this.checkContinueChatLimits(pending)) return false
+					await this.checkOtherBlockedBeforeSend(pending.enterpriseAccId, pending)
+					if (!this._detailPageAlive || this._pendingContinueChat !== pending) return false
 					const result = await service.sendMessage(creator.createTextMessage(CONTINUE_CHAT_TEXT), conversationId)
 					if (!result || !result.message) throw new Error('求职消息发送失败')
 					pending.textSent = true
@@ -477,9 +499,10 @@
 					// 聊天页按双方账号查询最新会话，账号入口不会重复发送默认招呼语。
 					const successStepQuery = successStep
 						? `&successStep=${encodeURIComponent(JSON.stringify(successStep))}` : ''
+					const blockedWarningQuery = pending.blockedWarning ? '&blockedWarning=1' : ''
 					uni.redirectTo({
 						url: appendExternalReturnUrl(
-							`/pages/person/m/chat?personAccId=${encodeURIComponent(pending.personAccId)}&enterpriseAccId=${encodeURIComponent(pending.enterpriseAccId)}${successStepQuery}`,
+							`/pages/person/m/chat?personAccId=${encodeURIComponent(pending.personAccId)}&enterpriseAccId=${encodeURIComponent(pending.enterpriseAccId)}${successStepQuery}${blockedWarningQuery}`,
 							this.externalReturnUrl
 						),
 						success: () => {

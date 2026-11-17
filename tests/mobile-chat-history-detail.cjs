@@ -35,9 +35,9 @@ function loadPage(relative, globals) {
 }
 
 function environment() {
-  const calls = [], navigation = [], toasts = [], previews = [], players = [], modals = [], sent = [], events = []
+  const calls = [], navigation = [], toasts = [], previews = [], players = [], modals = [], sent = [], events = [], blockChecks = []
   const listeners = new Map()
-  const state = { loggedIn: true, account: 'person-1', loginError: null, back: 0, relaunch: '' }
+  const state = { loggedIn: true, account: 'person-1', loginError: null, back: 0, relaunch: '', blocked: false }
   let request = async args => {
     if (args.Name === 'Chat.MyChat.Limits') return { Code: 0, Data: {} }
     if (args.Name === 'Chat.Chat.GetSingleChat') return { Code: 0, Data: singleDetail }
@@ -99,6 +99,10 @@ function environment() {
   const nim = {
     V2NIMLoginService: { getLoginUser: () => state.account },
     V2NIMConversationIdUtil: { p2pConversationId: id => `p2p-${id}` },
+    V2NIMUserService: { checkBlock: async accounts => {
+      blockChecks.push(plain(accounts)); events.push('block-check')
+      return Object.fromEntries(accounts.map(accountId => [accountId, state.blocked]))
+    } },
     V2NIMMessageCreator: {
       createCustomMessage: (text, body) => ({ kind: 'custom', text, body }),
       createTextMessage: text => ({ kind: 'text', text })
@@ -129,7 +133,8 @@ function environment() {
   }
   loaded.page.$refs = { jobPicker: popup }
   return {
-    ...loaded, globals, service, state, calls, navigation, toasts, previews, players, listeners, modals, sent, events, nim, popup,
+    ...loaded, globals, service, state, calls, navigation, toasts, previews, players, listeners, modals, sent, events,
+    blockChecks, nim, popup,
     request: handler => { request = handler },
     send: handler => { send = handler },
     emit: (event, payload) => listeners.get(event)?.(payload),
@@ -625,8 +630,9 @@ async function verifyJobPickerFlow() {
     await flush()
     assert.deepStrictEqual(env.events.slice(2), [
       'Chat.Person.GetJobState', 'Chat.Chat.GetJobList', 'Chat.MyChat.Limits', 'Chat.Chat.ChangeJob',
-      'Chat.MyChat.Limits', 'custom', 'Chat.MyChat.Limits', 'text'
+      'Chat.MyChat.Limits', 'block-check', 'custom', 'Chat.MyChat.Limits', 'block-check', 'text'
     ])
+    assert.deepStrictEqual(env.blockChecks, [['enterprise-1'], ['enterprise-1']])
     assert.equal(env.navigation[0].url, selectedUrl)
     assert.equal(env.page.chatDetail.JobId, singleDetail.JobId)
     env.navigation[0].success()
@@ -775,13 +781,18 @@ function confirmSwitch(env, confirm = true) {
 async function verifyContinueFlow() {
   const matched = environment()
   await matched.enter()
+  matched.state.blocked = true
   const first = matched.page.continueChat()
   await flush()
-  assert.deepStrictEqual(matched.events.slice(2), ['Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.MyChat.Limits', 'text'])
+  assert.deepStrictEqual(matched.events.slice(2), [
+    'Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.MyChat.Limits', 'block-check', 'text'
+  ])
+  assert.deepStrictEqual(matched.blockChecks, [['enterprise-1']])
   assert.equal(matched.modals.length, 0)
   assert.equal(matched.sent[0].conversationId, 'p2p-enterprise-1')
   assert.equal(matched.sent[0].message.text, '我正在求职，请问贵公司还招人吗？')
-  assert.equal(matched.navigation[0].url, continuedUrl)
+  assert.equal(matched.navigation[0].url, `${continuedUrl}&blockedWarning=1`)
+  assert.equal(matched.toasts.length, 0, 'block warning is deferred until the chat page is ready')
   assert.equal(matched.page.isContinuingChat, true)
   await matched.page.continueChat()
   assert.equal(matched.sent.length, 1)
@@ -824,9 +835,10 @@ async function verifyContinueFlow() {
   customReceipt.resolve({ message: changed.sent[0].message })
   await flush()
   assert.deepStrictEqual(changed.events.slice(2), [
-    'Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.MyChat.Limits', 'Chat.Chat.ChangeJob', 'Chat.MyChat.Limits', 'custom',
-    'Chat.MyChat.Limits', 'text'
+    'Chat.Person.GetJobState', 'Chat.ChatButton.Get', 'Chat.MyChat.Limits', 'Chat.Chat.ChangeJob',
+    'Chat.MyChat.Limits', 'block-check', 'custom', 'Chat.MyChat.Limits', 'block-check', 'text'
   ])
+  assert.deepStrictEqual(changed.blockChecks, [['enterprise-1'], ['enterprise-1']])
   assert.equal(changed.sent[1].message.text, '我正在求职，请问贵公司还招人吗？')
   assert.equal(changed.sent[1].conversationId, changed.sent[0].conversationId)
   assert.equal(changed.navigation[0].url, continuedUrl)

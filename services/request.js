@@ -22,6 +22,7 @@ const chatLimitsRequests = new Map()
 
 const SPECIAL_CODE_MESSAGES = Object.freeze({
 	'9000002': '登录失效',
+	'4000020': '数据逻辑错误',
 	'4100001': '账户不存在',
 	'9000004': '您的账户已在其他设备登录，如非本人操作，请联系400-672-6607'
 })
@@ -187,15 +188,17 @@ function getAuthFromCookie(isEnterprise) {
 	// 判断是否包含 ehr（区分大小写，EHR 匹配不到）
 	if (url.includes('ehr')) {
 		return {
-			EnterpriseId: 198185,
-			Token: 'scX23qFZ7XnH0Zv9bxvQ',
+			EnterpriseId: 197979,
+			Token: '0nNGL2cheqb7pGwkri1A',
 			// EnterpriseId: 19441,
-			// Token: 'JAkHgZKpTWW07SFeUExL',
+			// Token: 'z5F_M6La006KQ6o-qlUI',
+			// EnterpriseId: 198185,
+			// Token: 'QHApHHEVyNhGj3NQZ6TW',
 		}
 	} else {
 		return {
 			PersonId: 210902,
-			Token: 'ngdt5-6x3DuQ1L0BdFGj',
+			Token: 'x4jb7TG1iISaPrORwumb',
 		}
 	}
 

@@ -1335,8 +1335,7 @@
 					})
 				})
 			},
-			async sendContinueHistoryMessage(detail, enterprise, isCurrent) {
-				if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪，请稍后重试')
+			async checkContinueHistoryLimits(detail, enterprise, isCurrent) {
 				const enterpriseJobId = enterprise && (enterprise.JobId !== undefined ? enterprise.JobId
 					: enterprise.Id !== undefined ? enterprise.Id : enterprise.ID)
 				const jobId = String(enterpriseJobId === undefined || enterpriseJobId === null ? '' : enterpriseJobId).trim()
@@ -1376,6 +1375,11 @@
 					this.showContinueChatSuccessStep(this.updateContinueJobDetail(detail, enterprise), limitsResponse)
 					return false
 				}
+				return true
+			},
+			async sendContinueHistoryMessage(detail, enterprise, isCurrent) {
+				if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪，请稍后重试')
+				if (!await this.checkContinueHistoryLimits(detail, enterprise, isCurrent)) return false
 				const nim = getNimInstance()
 				const creator = nim && nim.V2NIMMessageCreator
 				const service = nim && nim.V2NIMMessageService
@@ -1387,17 +1391,19 @@
 					if (typeof creator.createCustomMessage !== 'function') throw new Error('当前聊天服务不支持发送自定义消息')
 					// 文档 2264 成功后发送 type=5，data 必须保留接口返回的 Enterprise 原对象。
 					message = creator.createCustomMessage('', JSON.stringify({ type: 5, data: enterprise }))
-				} else {
-					if (typeof creator.createTextMessage !== 'function') throw new Error('当前聊天服务不支持发送文本消息')
-					message = creator.createTextMessage(CONTINUE_CHAT_TEXT)
+					const switchResult = await service.sendMessage(message, detail.conversationId)
+					if (!switchResult || !switchResult.message) throw new Error('职位切换自定义消息发送失败')
+					if (isCurrent && !isCurrent()) return false
 				}
+				if (typeof creator.createTextMessage !== 'function') throw new Error('当前聊天服务不支持发送文本消息')
+				message = creator.createTextMessage(CONTINUE_CHAT_TEXT)
 				const result = await service.sendMessage(message, detail.conversationId)
-				if (!result || !result.message) throw new Error(enterprise ? '职位切换自定义消息发送失败' : '继续聊天消息发送失败')
+				if (!result || !result.message) throw new Error('继续聊天消息发送失败')
 				if (isCurrent && !isCurrent()) return false
 				return true
 			},
 			showContinueChatSuccessStep(detail, response) {
-				const stepDetail = { ...detail, initialAccess: response }
+				const stepDetail = { ...detail, skipInitialAccess: false, skipGreeting: true, initialAccess: response }
 				this.historyChatDetail = stepDetail
 				this.chatDetail = stepDetail
 				this.selectedId = stepDetail.conversationId
@@ -1436,6 +1442,8 @@
 					&& this.activeMainTab === 'history' && requestId === this._continueHistoryRequestId
 				this.isContinuingHistoryChat = true
 				try {
+					// 点击继续聊聊先校验沟通权限，通过后再检查职位或切换职位。
+					if (!await this.checkContinueHistoryLimits(detail, null, isCurrent)) return
 					// 历史记录可能来自职位已失效或已招满的会话，进入实时聊天前重新确认状态。
 					const state = await getHistoryChatJobState(detail.jobId)
 					if (!isCurrent()) return
