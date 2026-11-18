@@ -1442,8 +1442,6 @@
 					&& this.activeMainTab === 'history' && requestId === this._continueHistoryRequestId
 				this.isContinuingHistoryChat = true
 				try {
-					// 点击继续聊聊先校验沟通权限，通过后再检查职位或切换职位。
-					if (!await this.checkContinueHistoryLimits(detail, null, isCurrent)) return
 					// 历史记录可能来自职位已失效或已招满的会话，进入实时聊天前重新确认状态。
 					const state = await getHistoryChatJobState(detail.jobId)
 					if (!isCurrent()) return

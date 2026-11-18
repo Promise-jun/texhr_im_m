@@ -170,7 +170,6 @@ async function verifyHistoryPages() {
         openContinuedChat: async (pending, step) => { opened.push(step) }
       }
       if (enterprise) {
-        page.checkContinueHistoryLimits = def.methods.checkContinueHistoryLimits.bind(page)
         page.updateContinueJobDetail = def.methods.updateContinueJobDetail.bind(page)
         page.showContinueChatSuccessStep = def.methods.showContinueChatSuccessStep.bind(page)
         await def.methods.continueHistoryChat.call(page)
