@@ -326,8 +326,8 @@
 							const confirmed = await this.confirmContinueJobSwitch()
 							if (!confirmed || !this._detailPageAlive) return
 						}
-						// 先检查云信是否就绪，避免职位已经切换却无法发送变更消息。
-						this.getContinueMessageContext(targetAccId)
+						// 先确认云信可用，避免职位已经切换却无法发送变更消息。
+						if (!this.getContinueMessageContext(targetAccId)) return
 						const enterprise = await changeHistoryChatJob(PersonAccId, targetAccId, targetJobId, undefined,
 							() => this._detailPageAlive && this._pendingContinueChat === pending)
 						if (!this._detailPageAlive || !enterprise) return
@@ -414,7 +414,7 @@
 				})
 			},
 			getContinueMessageContext(enterpriseAccId) {
-				if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪，请稍后重试')
+				if (!isNimLoggedIn()) return null
 				const nim = getNimInstance()
 				const creator = nim.V2NIMMessageCreator
 				const service = nim.V2NIMMessageService
@@ -427,7 +427,7 @@
 			async checkContinueChatLimits(pending) {
 				const response = await requestApi({
 					Name: 'Chat.MyChat.Limits',
-					Content: { JobId: pending.jobId, ResumeId: pending.resumeId }
+					Content: { JobId: pending.jobId, ResumeId: pending.resumeId, IsSendMsg: true }
 				})
 				if (!this._detailPageAlive) return false
 				if (!response || Number(response.Code) !== 0) {
@@ -472,7 +472,9 @@
 				}
 			},
 			async sendContinueChatMessages(pending) {
-				const { creator, service, conversationId } = this.getContinueMessageContext(pending.enterpriseAccId)
+				const context = this.getContinueMessageContext(pending.enterpriseAccId)
+				if (!context) return false
+				const { creator, service, conversationId } = context
 				// 切换成功先发送 type=5 卡片；逐条等待 SDK 回执，失败重试不重发已成功的消息。
 				if (pending.enterprise && !pending.customSent) {
 					if (!await this.checkContinueChatLimits(pending)) return false

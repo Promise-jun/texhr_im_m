@@ -165,7 +165,7 @@ async function verifyHistoryPages() {
       } : {
         _detailPageAlive: true, canContinueChat: true,
         chatDetail: { JobId: 'job', ResumeId: 'resume', PersonAccId: 'p', EnterpriseAccId: 'e' },
-        destroyAudioPlayer() {}, getContinueMessageContext() {}, confirmContinueJobSwitch: async () => true,
+        destroyAudioPlayer() {}, getContinueMessageContext: () => ({}), confirmContinueJobSwitch: async () => true,
         sendContinueChatMessages: async () => true,
         openContinuedChat: async (pending, step) => { opened.push(step) }
       }

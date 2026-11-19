@@ -46,7 +46,6 @@ function environment(options = {}) {
   }
   const globals = { console: { error: (...args) => logs.push(args), warn() {} },
     getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
-    notifyNimNotReady: () => toasts.push('聊天服务尚未就绪'),
     NIM_EMOJIS: [], PcChatPanel: {}, PcChatHistoryPanel: {},
     requestApi: args => { calls.push(args); return request(args) },
     uni: { showToast: value => toasts.push(value.title), showModal() {} } }
@@ -297,7 +296,7 @@ async function verify() {
     else unavailable.state.loggedIn = false
     await unavailable.panel.togglePinned()
     assert.equal(unavailable.calls.length, 0)
-    assert.equal(unavailable.toasts[0], '聊天服务尚未就绪')
+    assert.equal(unavailable.toasts.length, 0, 'unavailable IM actions stay silent')
   }
   console.log('PASS: hidden, destroyed, opening, busy, denied, missing-account and logged-out conversations cannot save pins')
 

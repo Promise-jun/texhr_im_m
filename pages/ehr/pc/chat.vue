@@ -197,8 +197,7 @@
 		getNimInstance,
 		getNimLoginError,
 		isNimConversationSynced,
-		isNimLoggedIn,
-		notifyNimNotReady
+		isNimLoggedIn
 	} from '../../../services/nim'
 	import {
 		getAllNimConversations,
@@ -533,7 +532,6 @@
 					|| !conversation || conversation.isHistory || conversation.type !== 1 || !conversation.id
 					|| this.updatingPinConversationId || this.deletingConversationId) return
 				if (!isNimLoggedIn()) {
-					notifyNimNotReady()
 					return
 				}
 				const nim = getNimInstance()
@@ -610,7 +608,6 @@
 					|| !conversation || conversation.isHistory || conversation.type !== 1 || !conversation.id
 					|| this.deletingConversationId || this.updatingPinConversationId) return
 				if (!isNimLoggedIn()) {
-					notifyNimNotReady()
 					return
 				}
 				this.closeConversationMenu()
@@ -1203,7 +1200,6 @@
 				}
 				if (!isNimLoggedIn() || conversation.type !== 1) {
 					if (conversation.type !== 1) uni.showToast({ title: '请选择人才单聊会话', icon: 'none' })
-					else notifyNimNotReady()
 					return
 				}
 
@@ -1342,7 +1338,7 @@
 					|| detail.jobId
 				const limitsResponse = await requestApi({
 					Name: 'Chat.MyChat.Limits',
-					Content: { JobId: jobId, ResumeId: detail.resumeId }
+					Content: { JobId: jobId, ResumeId: detail.resumeId, IsSendMsg: true }
 				})
 				if (isCurrent && !isCurrent()) return false
 				const errorMessage = limitsResponse && Number(limitsResponse.Code) !== 0 ?
@@ -1378,7 +1374,7 @@
 				return true
 			},
 			async sendContinueHistoryMessage(detail, enterprise, isCurrent) {
-				if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪，请稍后重试')
+				if (!isNimLoggedIn()) return false
 				if (!await this.checkContinueHistoryLimits(detail, enterprise, isCurrent)) return false
 				const nim = getNimInstance()
 				const creator = nim && nim.V2NIMMessageCreator
@@ -1432,7 +1428,6 @@
 				if (!this._conversationPageAlive || !this.pageVisible || this.activeMainTab !== 'history'
 					|| this.openingConversationId || this.isContinuingHistoryChat || !this.historyChatDetail) return
 				if (!isNimLoggedIn()) {
-					notifyNimNotReady('send')
 					return
 				}
 				const detail = this.historyChatDetail

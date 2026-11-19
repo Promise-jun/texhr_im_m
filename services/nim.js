@@ -26,7 +26,6 @@ export const NIM_EVENT = Object.freeze({
 let nimInstance = null
 let loginPromise = null
 let lastLoginError = null
-const nimNotReadyNoticeContexts = new Set()
 // 在单例层保留同步状态，页面晚于 onSyncFinished 创建时也能读取。
 let conversationSynced = false
 // 当前前台聊天会话 ID；消息列表页据此避免给正在查看的会话重复显示红点。
@@ -42,10 +41,7 @@ function bindLoginListeners(nim) {
 	const loginService = nim.V2NIMLoginService
 
 	loginService.on('onLoginStatus', status => {
-		if (status === 1) {
-			lastLoginError = null
-			nimNotReadyNoticeContexts.clear()
-		}
+		if (status === 1) lastLoginError = null
 		else conversationSynced = false
 		console.log('[NIM] 登录成功', status)
 		emit(NIM_EVENT.LOGIN_STATUS, status)
@@ -237,7 +233,6 @@ export function loginNim(account, token) {
 
 export async function logoutNim() {
 	conversationSynced = false
-	nimNotReadyNoticeContexts.clear()
 	if (!nimInstance) return
 	const loginStatus = nimInstance.V2NIMLoginService.getLoginStatus()
 	if (loginStatus === 1 || loginStatus === 2) {
@@ -269,16 +264,6 @@ export function getNimLoginError() {
 	return lastLoginError
 }
 
-/** Show the unavailable notice once until the next successful login. */
-export function notifyNimNotReady(context = 'action') {
-	const noticeContext = String(context || 'action')
-	if (nimNotReadyNoticeContexts.has(noticeContext) || typeof uni === 'undefined' ||
-		typeof uni.showToast !== 'function') return false
-	uni.showToast({ title: '聊天服务尚未就绪', icon: 'none' })
-	nimNotReadyNoticeContexts.add(noticeContext)
-	return true
-}
-
 /** 标记当前正在前台查看的聊天会话，供消息列表页判断是否需要显示红点。 */
 export function setActiveConversationId(conversationId) {
 	activeConversationId = conversationId ? String(conversationId) : ''
@@ -297,7 +282,6 @@ export function clearActiveConversationId(conversationId) {
 
 export async function destroyNim() {
 	conversationSynced = false
-	nimNotReadyNoticeContexts.clear()
 	if (!nimInstance) {
 		activeConversationId = ''
 		return

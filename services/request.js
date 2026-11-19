@@ -188,15 +188,17 @@ function getAuthFromCookie(isEnterprise) {
 	// 判断是否包含 ehr（区分大小写，EHR 匹配不到）
 	if (url.includes('ehr')) {
 		return {
-			// EnterpriseId: 197979,
-			// Token: 'FV7VB0KZeRnESilEh3e9',
-			EnterpriseId: 19441,
-			Token: 'dyj9BdYPqK05-LgEOiCk',
+			EnterpriseId: 198267,
+			Token: 'GBWeSdyeq9Uw7Yl98H8c',
+			// EnterpriseId: 19441,
+			// Token: 'eEMtSa06xYFoOBHsZyq2',
 		}
 	} else {
 		return {
-			PersonId: 210902,
-			Token: 'Rdic4egQpHrE20-6TCXt',
+			PersonId: 272490,
+			Token: 'C4jZuy5Rvwo5TSWaaiI0',
+			// PersonId: 210902,
+			// Token: 'oTG1n2RixCcqdduU1Rgm',
 		}
 	}
 

@@ -25,7 +25,6 @@ function environment(initialBlocked = false) {
   } }
   const context = vm.createContext({ module: { exports: {} }, console: { warn() {} }, NIM_EMOJIS: [],
     getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
-    notifyNimNotReady: () => toasts.push({ title: '聊天服务尚未就绪' }),
     uni: { showToast: value => toasts.push(value) },
     requestApi: () => { throw new Error('屏蔽不应调用业务置顶或保存接口') } })
   vm.runInContext(script, context)

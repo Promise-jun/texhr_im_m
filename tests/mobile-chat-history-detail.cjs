@@ -53,7 +53,6 @@ function environment() {
     NIM_EVENT: { LOGIN_STATUS: 'login-status', LOGIN_FAILED: 'login-failed' },
     getNimLoginError: () => state.loginError,
     isNimLoggedIn: () => state.loggedIn,
-    notifyNimNotReady: () => toasts.push({ title: '聊天服务尚未就绪' }),
     getExternalReturnUrl: options => String(options && options.returnUrl || '').trim(),
     appendExternalReturnUrl: (url, externalReturnUrl) => externalReturnUrl ?
       `${url}${url.includes('?') ? '&' : '?'}returnUrl=${encodeURIComponent(externalReturnUrl)}` : url,
@@ -341,7 +340,7 @@ async function verifyEntryAndMedia() {
   await list.openConversation({ id: 'bad', isHistory: true })
   assert.match(env.toasts[0].title, /对方会话账号/)
   await list.openConversation({ id: 'recent', targetId: 'company' })
-  assert.equal(env.toasts[1].title, '聊天服务尚未就绪')
+  assert.equal(env.toasts.length, 1, 'an offline recent conversation is ignored without an IM readiness toast')
   env.state.loggedIn = true
   await list.openConversation({ id: 'recent', targetId: 'company' })
   assert.equal(env.calls.length, 0, '列表跳转不请求 GetSingleChat')
@@ -613,7 +612,9 @@ async function verifyJobPickerFlow() {
       }
     })
     assert.deepStrictEqual(env.calls[6], {
-      Name: 'Chat.MyChat.Limits', Content: { JobId: availableJob.JobId, ResumeId: singleDetail.ResumeId }
+      Name: 'Chat.MyChat.Limits', Content: {
+        JobId: availableJob.JobId, ResumeId: singleDetail.ResumeId, IsSendMsg: true
+      }
     })
     assert.deepStrictEqual(JSON.parse(env.sent[0].message.body), {
       type: 5, data: { ...availableJob, EnterpriseTime: '职位已变更', Tips: '保留接口字段' }
@@ -828,7 +829,9 @@ async function verifyContinueFlow() {
     type: 5, data: { JobId: singleDetail.JobId, JobName: '页面职位' }
   })
   assert.deepStrictEqual(changed.calls[6], {
-    Name: 'Chat.MyChat.Limits', Content: { JobId: singleDetail.JobId, ResumeId: singleDetail.ResumeId }
+    Name: 'Chat.MyChat.Limits', Content: {
+      JobId: singleDetail.JobId, ResumeId: singleDetail.ResumeId, IsSendMsg: true
+    }
   })
   assert.equal(changed.sent.length, 1)
   assert.equal(changed.navigation.length, 0)

@@ -335,7 +335,6 @@
 		getNimLoginError,
 		getNimInstance,
 		isNimLoggedIn,
-		notifyNimNotReady,
 		setActiveConversationId
 	} from '../../../services/nim'
 	import {
@@ -1249,7 +1248,8 @@
 					Name: CHAT_LIMITS_API,
 					Content: {
 						JobId: jobId,
-						ResumeId: resumeId
+						ResumeId: resumeId,
+						IsSendMsg: true
 					}
 				})
 				if (!this._chatPageAlive || this.conversationId !== conversationId ||
@@ -1404,9 +1404,7 @@
 					this.enterpriseAccId = targetEnterpriseAccId
 
 					// 切换职位只发送职位变更自定义消息，不重新拉取或刷新历史消息。
-					if (!isNimLoggedIn()) {
-						throw new Error('聊天服务尚未就绪，职位已切换，请稍后重试')
-					}
+					if (!isNimLoggedIn()) return
 
 					const nim = getNimInstance()
 					if (!this.conversationId) {
@@ -2075,7 +2073,6 @@
 					return
 				}
 				if (!isNimLoggedIn()) {
-					notifyNimNotReady()
 					return
 				}
 
@@ -2219,7 +2216,6 @@
 					return
 				}
 				if (!this.conversationId || !isNimLoggedIn()) {
-					notifyNimNotReady()
 					return
 				}
 
@@ -2305,9 +2301,28 @@
 							ToAccId: this.enterpriseAccId
 						}
 					})
+					if (!this._chatPageAlive) return
+					const showJobUnavailable = () => {
+						uni.hideLoading()
+						loadingVisible = false
+						uni.showModal({
+							title: '提示',
+							content: '职位已招满，您再看看其他职位吧',
+							showCancel: false,
+							confirmText: '知道了'
+						})
+					}
+					if (response === null) {
+						showJobUnavailable()
+						return
+					}
 					if (!response || Number(response.Code) !== 0) {
 						const code = response && response.Code !== undefined ? response.Code : 'unknown'
 						throw new Error(`获取职位信息失败，业务错误码：${code}`)
+					}
+					if (response.Data === null || (typeof response.Data === 'string' && response.Data.trim() === 'null')) {
+						showJobUnavailable()
+						return
 					}
 
 					const data = parseResponseData(response.Data, '职位信息接口返回的数据格式不正确')
@@ -2630,7 +2645,6 @@
 				if (this.isRecording || this._voiceFinishing || this.isSendingMessage || this.isTranscribingVoice)
 					return
 				if (!this.conversationId || !isNimLoggedIn()) {
-					notifyNimNotReady('send')
 					return
 				}
 
@@ -3708,7 +3722,6 @@
 			async selectAndSendImage(sourceType) {
 				if (this.isSendingMessage || this.isSelectingImage) return
 				if (!this.conversationId || !isNimLoggedIn()) {
-					notifyNimNotReady('send')
 					return
 				}
 
@@ -3874,7 +3887,6 @@
 			async sendTextContent(content) {
 				if (this.isSendingMessage || this.isSelectingImage) return false
 				if (!this.conversationId || !isNimLoggedIn()) {
-					notifyNimNotReady('send')
 					return false
 				}
 

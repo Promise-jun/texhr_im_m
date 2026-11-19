@@ -251,7 +251,6 @@
 		getNimLoginError,
 		getNimInstance,
 		isNimLoggedIn,
-		notifyNimNotReady,
 		setActiveConversationId,
 		getActiveConversationId,
 		clearActiveConversationId
@@ -873,7 +872,8 @@
 					Name: 'Chat.MyChat.Limits',
 					Content: {
 						JobId: checkedJobId,
-						ResumeId: checkedResumeId
+						ResumeId: checkedResumeId,
+						IsSendMsg: true
 					}
 				})
 				if (!this._alive || !isCurrent() || this.conversationId !== conversationId ||
@@ -1440,7 +1440,7 @@
 				this.blockStatusError = ''
 				try {
 					if (!personAccId) throw new Error('未获取到聊天对象账号')
-					if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪')
+					if (!isNimLoggedIn()) return false
 					const userService = getNimInstance().V2NIMUserService
 					if (!userService || typeof userService.checkBlock !== 'function') {
 						throw new Error('当前聊天服务不支持黑名单状态查询')
@@ -1484,10 +1484,7 @@
 					})
 					return
 				}
-				if (!isNimLoggedIn()) {
-					notifyNimNotReady()
-					return
-				}
+				if (!isNimLoggedIn()) return
 				// 首次查询或查询失败后的点击只重试查询，用户确认新文案后再点击执行操作。
 				if (!this.blockStatusLoaded) return this.loadBlockStatus()
 				const personAccId = this.personAccId
@@ -1658,7 +1655,7 @@
 						salary: responseValue(enterprise, ['Salary', 'SalaryText', 'Pay']) || job.salary
 					}
 
-					if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪')
+					if (!isNimLoggedIn()) return
 					const nim = getNimInstance()
 					const messageService = nim && nim.V2NIMMessageService
 					const messageCreator = nim && nim.V2NIMMessageCreator
@@ -1806,7 +1803,6 @@
 				// 与消息类型无关的发送入口：统一查询、发送锁、错误码提示和成功回执处理。
 				if (!this._alive || !this.canSendText || typeof createMessage !== 'function') return false
 				if (!this.conversationId || !isNimLoggedIn()) {
-					notifyNimNotReady('send')
 					return false
 				}
 				const conversationId = this.conversationId
@@ -1824,7 +1820,7 @@
 					// 查询期间可能切换会话或关闭页面，不能在旧面板查询完成后继续发消息。
 					if (!isCurrent() || !this._alive || !this.visible || this.opening || !this.accessReady ||
 						this.conversationId !== conversationId || this.personAccId !== personAccId) return false
-					if (!isNimLoggedIn()) throw new Error('聊天服务尚未就绪')
+					if (!isNimLoggedIn()) return false
 					const result = await nim.V2NIMMessageService.sendMessage(createMessage(nim), conversationId)
 					// 保留失败回执上的 code，让 102426 也能走人才屏蔽提示。
 					if (!result || !result.message) throw result || new Error('消息发送失败')
@@ -1881,7 +1877,6 @@
 					return
 				}
 				if (!this.conversationId || !isNimLoggedIn()) {
-					notifyNimNotReady()
 					return
 				}
 				const conversationId = this.conversationId

@@ -34,7 +34,6 @@ function environment() {
     getActiveConversationId: () => '',
     getNimLoginError: () => state.loginError,
     isNimLoggedIn: () => state.loggedIn,
-    notifyNimNotReady() {},
     getExternalReturnUrl: options => String(options && options.returnUrl || '').trim(),
     appendExternalReturnUrl: (url, externalReturnUrl) => externalReturnUrl ?
       `${url}${url.includes('?') ? '&' : '?'}returnUrl=${encodeURIComponent(externalReturnUrl)}` : url,

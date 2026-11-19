@@ -35,7 +35,6 @@ function environment(blocked = false) {
   const context = vm.createContext({ module: { exports: {} }, NIM_EMOJIS: [], maskPhoneNumbers,
     requestApi: args => { limitsCalls.push(args); order.push('limits'); return limits(args) },
     getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
-    notifyNimNotReady: () => { toasts.push({ title: '聊天服务尚未就绪' }); order.push('toast') },
     console: { warn: (...args) => warnings.push(args) },
     uni: { showToast: value => { toasts.push(value); order.push('toast') }, showModal: value => modals.push(value) } })
   vm.runInContext(script, context)
@@ -92,7 +91,7 @@ async function verify() {
     assert.equal(env.toasts[0].icon, 'none')
     assert.equal(env.sends.length, 1)
     assert.deepEqual(env.limitsCalls[0], {
-      Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-a', ResumeId: 'resume-a' }
+      Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-a', ResumeId: 'resume-a', IsSendMsg: true }
     })
     assert.equal(env.sends[0].conversationId, 'a')
     if (typeof content === 'string') assert.equal(env.sends[0].message.text, content)

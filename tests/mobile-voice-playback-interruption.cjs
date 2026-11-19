@@ -13,7 +13,6 @@ function createPage(conversationId, events) {
     module: { exports: {} },
     console,
     isNimLoggedIn: () => true,
-    notifyNimNotReady() {},
     setInterval: () => 1,
     clearInterval() {},
     uni: { showToast() {} }

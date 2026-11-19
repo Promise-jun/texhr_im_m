@@ -38,7 +38,6 @@ function environment(options = {}) {
   }
   const context = vm.createContext({ module: { exports: {} }, maskPhoneNumbers, console: { warn() {} },
     NIM_EMOJIS: [], getNimInstance: () => nim, isNimLoggedIn: () => state.loggedIn,
-    notifyNimNotReady: () => toasts.push('聊天服务尚未就绪'),
     uni: { showToast: value => toasts.push(value.title), showModal: value => modals.push(value),
       navigateBack: () => { state.uniBack++ } },
     ...(options.browser === false ? {} : { window: {

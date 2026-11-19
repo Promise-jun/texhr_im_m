@@ -40,7 +40,6 @@ function environment() {
   const globals = {
     PcChatPanel: {}, PcChatHistoryPanel: {},
     isNimLoggedIn: () => state.loggedIn,
-    notifyNimNotReady: () => toasts.push('聊天服务尚未就绪'),
     getNimInstance: () => ({
       V2NIMLoginService: { getLoginUser: () => 'enterprise' },
       V2NIMMessageCreator: {
@@ -189,7 +188,7 @@ async function verifyFlow() {
   assert.equal(env.sentMessages[0].conversationId, 'p2p-a')
   assert.equal(env.sentMessages[env.sentMessages.length - 1].message.text, '好久没互动了，我对你简历很感兴趣，快来聊聊~')
   assert.deepStrictEqual(env.calls[4], {
-    Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-a', ResumeId: 'resume a' }
+    Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-a', ResumeId: 'resume a', IsSendMsg: true }
   })
   assert.equal(env.calls.length, 5)
   env.panelDef.beforeDestroy.call(panel)
@@ -332,7 +331,7 @@ async function verifyContinueJobSwitch() {
     { Name: 'Chat.Chat.ChangeJob', Content: {
       PersonAccId: 'a', EnterpriseAccId: 'enterprise', JobId: 'job-current', IsMessage: true
     } },
-    { Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-current', ResumeId: 'resume-a' } }
+    { Name: 'Chat.MyChat.Limits', Content: { JobId: 'job-current', ResumeId: 'resume-a', IsSendMsg: true } }
   ])
   assert.equal(env.sentMessages.length, 2)
   assert.equal(env.sentMessages[0].conversationId, 'p2p-a')

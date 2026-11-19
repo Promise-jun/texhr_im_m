@@ -17,19 +17,9 @@
 		</view>
 
 		<view class="conversation-list">
-			<view v-for="conversation in visibleConversations" :key="conversation.id" class="conversation-swipe-item"
-				@touchstart="handleSwipeStart($event, conversation)" @touchmove="handleSwipeMove"
-				@touchend="handleSwipeEnd($event, conversation)" @touchcancel="handleSwipeCancel">
-				<view v-if="!conversation.isHistory" class="conversation-actions">
-					<view class="conversation-action stick-action" @click.stop="toggleConversationStickTop(conversation)">
-						<text>{{ conversation.stickTop ? '取消\n置顶' : '置顶' }}</text>
-					</view>
-					<view class="conversation-action delete-action" @click.stop="confirmDeleteConversation(conversation)">
-						<text>删除</text>
-					</view>
-				</view>
-			<view class="conversation-item" :class="{ 'is-stick-top': conversation.stickTop }"
-				:style="getConversationItemStyle(conversation)" @click="openConversation(conversation)">
+			<view v-for="conversation in visibleConversations" :key="conversation.id" class="conversation-item"
+				:class="{ 'is-stick-top': conversation.stickTop }"
+				@longpress.stop="handleConversationLongPress(conversation)" @click="openConversation(conversation)">
 				<image v-if="conversation.stickTop" src="/static/icon_top.png" class="top-icon" mode="aspectFit"></image>
 				<view class="avatar-wrap">
 					<image :src="conversation.avatar" class="avatar" mode="aspectFill"></image>
@@ -47,7 +37,6 @@
 						<text class="message">{{ formatMessagePreview(conversation.message) }}</text>
 					</view>
 				</view>
-			</view>
 			</view>
 
 			<view v-if="visibleIsLoading && !visibleConversations.length" class="list-state">
@@ -75,8 +64,7 @@
 		getActiveConversationId,
 		getNimInstance,
 		getNimLoginError,
-		isNimLoggedIn,
-		notifyNimNotReady
+		isNimLoggedIn
 	} from '../../../services/nim'
 	import {
 		getHistoryConversationsPage,
@@ -129,12 +117,10 @@
 				loadError: '',
 				historyLoadError: '',
 				currentTime: Date.now(),
-				swipeConversationId: '',
-				swipeOffset: 0,
-				swipeTransitionEnabled: true,
 				updatingPinConversationId: '',
 				deletingConversationId: '',
 				openingConversationId: '',
+				ignoreConversationClickUntil: 0,
 				externalReturnUrl: '',
 				// 新消息事件是页面级兜底状态，列表项上的 hasNewMessage 会进一步定位到具体会话。
 				hasNewMessage: false
@@ -185,108 +171,28 @@
 		methods: {
 			switchTab(tab) {
 				this.activeTab = tab
-				this.closeSwipedConversation()
 				if (tab === 'history') return this.requestHistoryConversations()
 			},
 			formatMessagePreview(message) {
 				return String(message === null || message === undefined ? '' : message).replace(/[\r\n]+/g, ' ')
 			},
-			getTouchPoint(event) {
-				const touch = event && ((event.touches && event.touches[0]) ||
-					(event.changedTouches && event.changedTouches[0]))
-				if (!touch) return null
-				return {
-					x: touch.clientX !== undefined ? touch.clientX : touch.pageX,
-					y: touch.clientY !== undefined ? touch.clientY : touch.pageY
-				}
-			},
-			getSwipeActionWidth() {
-				if (!this._swipeActionWidth) {
-					this._swipeActionWidth = typeof uni !== 'undefined' && typeof uni.upx2px === 'function' ?
-						uni.upx2px(160) : 160
-				}
-				return this._swipeActionWidth
-			},
-			getConversationItemStyle(conversation) {
-				const offset = this.swipeConversationId === conversation.id ? this.swipeOffset : 0
-				return {
-					transform: `translate3d(${offset}px, 0, 0)`,
-					transition: this.swipeTransitionEnabled ? 'transform 180ms ease-out' : 'none'
-				}
-			},
-			handleSwipeStart(event, conversation) {
-				const touch = this.getTouchPoint(event)
-				if (!touch) return
-				if (conversation.isHistory) {
-					this.closeSwipedConversation()
-					return
-				}
-				if (this.swipeConversationId && this.swipeConversationId !== conversation.id) {
-					this.closeSwipedConversation()
-				}
-
-				this.swipeTransitionEnabled = false
-				this._swipeTouch = {
-					conversationId: conversation.id,
-					startX: touch.x,
-					startY: touch.y,
-					startOffset: this.swipeConversationId === conversation.id ? this.swipeOffset : 0,
-					isHorizontal: false
-				}
-			},
-			handleSwipeMove(event) {
-				const gesture = this._swipeTouch
-				const touch = this.getTouchPoint(event)
-				if (!gesture || !touch) return
-
-				const deltaX = touch.x - gesture.startX
-				const deltaY = touch.y - gesture.startY
-				if (!gesture.isHorizontal) {
-					if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 8) {
-						this._swipeTouch = null
-						this.closeSwipedConversation()
-						return
-					}
-					if (Math.abs(deltaX) < 8) return
-					gesture.isHorizontal = true
-				}
-
-				this.swipeConversationId = gesture.conversationId
-				this.swipeTransitionEnabled = false
-				const maxOffset = this.getSwipeActionWidth()
-				this.swipeOffset = Math.max(-maxOffset, Math.min(0, gesture.startOffset + deltaX))
-			},
-			handleSwipeEnd(event, conversation) {
-				const gesture = this._swipeTouch
-				if (!gesture || gesture.conversationId !== conversation.id) return
-				this._swipeTouch = null
-				if (!gesture.isHorizontal) {
-					this.swipeTransitionEnabled = true
-					return
-				}
-
-				const shouldOpen = this.swipeOffset <= -this.getSwipeActionWidth() / 2
-				this.swipeTransitionEnabled = true
-				this.swipeOffset = shouldOpen ? -this.getSwipeActionWidth() : 0
-				this._ignoreConversationClick = true
-				setTimeout(() => {
-					this._ignoreConversationClick = false
-				}, 220)
-			},
-			handleSwipeCancel() {
-				this._swipeTouch = null
-				this.closeSwipedConversation()
-			},
-			closeSwipedConversation() {
-				this.swipeTransitionEnabled = true
-				this.swipeConversationId = ''
-				this.swipeOffset = 0
+			handleConversationLongPress(conversation) {
+				if (!conversation || conversation.isHistory) return
+				this.ignoreConversationClickUntil = Date.now() + 600
+				const itemList = [conversation.stickTop ? '取消置顶' : '置顶', '删除']
+				uni.showActionSheet({
+					itemList,
+					success: result => {
+						if (result.tapIndex === 0) this.toggleConversationStickTop(conversation)
+						if (result.tapIndex === 1) this.confirmDeleteConversation(conversation)
+					},
+					fail: () => {}
+				})
 			},
 			async toggleConversationStickTop(conversation) {
 				if (!conversation || conversation.isHistory || !conversation.id || this.updatingPinConversationId ||
 					this.deletingConversationId) return
 				if (!isNimLoggedIn()) {
-					notifyNimNotReady()
 					return
 				}
 
@@ -303,7 +209,6 @@
 				let businessUpdated = false
 				let toastTitle = ''
 				this.updatingPinConversationId = conversation.id
-				this.closeSwipedConversation()
 				uni.showLoading({
 					title: shouldStickTop ? '置顶中' : '取消中',
 					mask: true
@@ -363,7 +268,6 @@
 			confirmDeleteConversation(conversation) {
 				if (!conversation || conversation.isHistory || !conversation.id || this.deletingConversationId ||
 					this.updatingPinConversationId) return
-				this.closeSwipedConversation()
 				uni.showModal({
 					title: '提示',
 					content: '确认删除该条会话所有聊天记录吗？',
@@ -377,7 +281,6 @@
 			async deleteConversation(conversation) {
 				if (!conversation || conversation.isHistory || !conversation.id || this.deletingConversationId) return
 				if (!isNimLoggedIn()) {
-					notifyNimNotReady()
 					return
 				}
 
@@ -406,7 +309,6 @@
 					return
 				}
 
-				this.closeSwipedConversation()
 				this.deletingConversationId = conversation.id
 				let businessDeleted = false
 				let historyCleared = false
@@ -722,9 +624,8 @@
 			},
 
 			async openConversation(conversation) {
-				if (this._ignoreConversationClick) return
-				if (this.swipeConversationId) {
-					this.closeSwipedConversation()
+				if (Date.now() < this.ignoreConversationClickUntil) {
+					this.ignoreConversationClickUntil = 0
 					return
 				}
 				if (!conversation || !conversation.id || this.openingConversationId) return
@@ -744,7 +645,6 @@
 					return
 				}
 				if (!isNimLoggedIn()) {
-					notifyNimNotReady()
 					return
 				}
 
@@ -897,45 +797,8 @@
 			background: #ffffff;
 			padding: 20rpx 0;
 
-			.conversation-swipe-item {
-				position: relative;
-				overflow: hidden;
-				width: 100%;
-			}
-
-			.conversation-actions {
-				position: absolute;
-				top: 0;
-				right: 0;
-				bottom: 0;
-				display: flex;
-				width: 160rpx;
-				height: 100%;
-
-				.conversation-action {
-					display: flex;
-					align-items: center;
-					justify-content: center;
-					width: 80rpx;
-					font-size: 24rpx;
-					line-height: 32rpx;
-					text-align: center;
-					color: #ffffff;
-					white-space: pre-line;
-
-					&.stick-action {
-						background: #aebbc4;
-					}
-
-					&.delete-action {
-						background: #ff5a00;
-					}
-				}
-			}
-
 			.conversation-item {
 				position: relative;
-				z-index: 1;
 				display: flex;
 				box-sizing: border-box;
 				width: 100%;

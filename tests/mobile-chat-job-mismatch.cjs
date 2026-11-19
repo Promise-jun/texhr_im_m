@@ -15,7 +15,8 @@ const message = (id, time) => ({
   messageType: 0, text: id, isSelf: false
 })
 
-function environment({ loggedIn = true, accountId = 'person', switchFails = false, singleResponse, limitsResponse } = {}) {
+function environment({ loggedIn = true, accountId = 'person', switchFails = false, singleResponse, limitsResponse,
+  getJobResponse } = {}) {
   const calls = [], modals = [], sent = [], historyRequests = [], profiles = [], reads = [], toasts = [], blockChecks = []
   const listeners = new Map()
   const state = { loggedIn, accountId }
@@ -75,6 +76,7 @@ function environment({ loggedIn = true, accountId = 'person', switchFails = fals
         case 'Chat.Person.GetJobState': return { Code: 0, Data: { State: 1 } }
         case 'Chat.CommonLanguage.Get': return { Code: 0, Data: { Rows: [] } }
         case 'Chat.Person.CheckSendResume': return { Code: 0, Data: { IsShow: true } }
+        case 'Chat.Chat.GetJob': return getJobResponse
         default: throw new Error(`unexpected API: ${args.Name}`)
       }
     },
@@ -189,7 +191,7 @@ async function verify() {
   const sendLimitCalls = existing.calls.filter(call => call.Name === 'Chat.MyChat.Limits')
   assert.equal(sendLimitCalls.length, 1, '不带 limit 的已有会话发送前仍须请求 Limits')
   assert.deepStrictEqual(JSON.parse(JSON.stringify(sendLimitCalls[0].Content)), {
-    JobId: 'old-job', ResumeId: 'resume'
+    JobId: 'old-job', ResumeId: 'resume', IsSendMsg: true
   })
   assert.equal(existing.sent.length, 1)
   assert.equal(existing.sent[0].value.text, '从聊天列表进入后发送')
@@ -273,6 +275,22 @@ async function verify() {
     assert.ok(failed.page.historyLoadError)
     assert.equal(failed.historyRequests.length, 0, '会话查询失败不继续初始化')
     assert.equal(failed.page.isCheckingLimits, false)
+  }
+
+  for (const getJobResponse of [null, { Code: 0, Data: null }, { Code: 0, Data: 'null' }]) {
+    const unavailable = environment({ getJobResponse })
+    unavailable.page._chatPageAlive = true
+    unavailable.page.personAccId = 'person'
+    unavailable.page.enterpriseAccId = 'enterprise'
+    await unavailable.page.openSendResumeModal()
+    assert.equal(unavailable.calls.filter(call => call.Name === 'Chat.Chat.GetJob').length, 1)
+    assert.equal(unavailable.modals.length, 1)
+    assert.equal(unavailable.modals[0].content, '职位已招满，您再看看其他职位吧')
+    assert.equal(unavailable.modals[0].confirmText, '知道了')
+    assert.equal(unavailable.modals[0].showCancel, false)
+    assert.equal(unavailable.page.showSendResumeModal, false)
+    assert.equal(unavailable.page.isLoadingSendResumeJob, false)
+    assert.equal(unavailable.toasts.length, 0)
   }
 
   for (const limit of ['true', 'false', '']) {

@@ -142,6 +142,9 @@ async function verify() {
   assert.equal(calls[1].Name, 'Chat.ChatButton.Get')
   assert.equal(calls[2].Name, 'Chat.MyChat.Limits')
   assert.equal(calls[3].Name, 'Chat.MyChat.Limits')
+  assert.deepEqual(calls[0].Content, { JobId: 'job-7', ResumeId: 'resume-3' })
+  assert.deepEqual(calls[2].Content, { JobId: 'job-7', ResumeId: 'resume-3', IsSendMsg: true })
+  assert.deepEqual(calls[3].Content, { JobId: 'job-7', ResumeId: 'resume-3', IsSendMsg: true })
   assert.deepEqual(eventOrder.slice(2, 8), [
     'Chat.MyChat.Limits', 'block-check', 'send',
     'Chat.MyChat.Limits', 'block-check', 'send'
@@ -171,6 +174,9 @@ async function verify() {
   const beforeTextSend = sent.length
   await page.sendMessage()
   assert.equal(calls.filter(call => call.Name === 'Chat.MyChat.Limits').length, beforeTextLimitCheck + 1)
+  assert.deepEqual(calls[calls.length - 1].Content, {
+    JobId: 'job-7', ResumeId: 'resume-3', IsSendMsg: true
+  })
   assert.equal(eventOrder[eventOrder.length - 2], 'Chat.MyChat.Limits')
   assert.equal(eventOrder[eventOrder.length - 1], 'send')
   assert.equal(sent[sent.length - 1].message.text, '138****5678')
